@@ -1,0 +1,9 @@
+node_modules/
+downloads/
+*.mp4
+*.log
+error.json
+dl_error.txt
+curl_test.mp4
+test-*.js
+test.js

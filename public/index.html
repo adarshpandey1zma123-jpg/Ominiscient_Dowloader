@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omniscient 4K YouTube Downloader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="circles">
+        <div class="circle circle-1"></div>
+        <div class="circle circle-2"></div>
+        <div class="circle circle-3"></div>
+    </div>
+
+    <main class="container">
+        <header class="header">
+            <h1 class="logo">
+                <i class="fa-solid fa-cloud-arrow-down gradient-text"></i>
+                <span class="gradient-text">Omniscient</span> Downloader
+            </h1>
+            <p class="subtitle">Download YouTube videos in magnificent 4K resolution.<br>Completely free, beautifully fast.</p>
+        </header>
+
+        <section class="search-section">
+            <form id="fetchForm" class="search-box">
+                <i class="fa-brands fa-youtube search-icon"></i>
+                <input type="url" id="urlInput" placeholder="Paste YouTube link here..." required autocomplete="off">
+                <button type="submit" id="fetchBtn">
+                    <span class="btn-text">Search</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </form>
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Analyzing video...</p>
+            </div>
+            <div id="errorMessage" class="error-message hidden"></div>
+        </section>
+
+        <section id="resultSection" class="result-section hidden">
+            <div class="card glass">
+                <div class="video-preview">
+                    <img id="videoThumb" src="" alt="Video Thumbnail">
+                </div>
+                <div class="video-info">
+                    <h2 id="videoTitle">Video Title Loading...</h2>
+                    <p id="videoDuration" class="meta-info"><i class="fa-regular fa-clock"></i> <span>00:00</span></p>
+                    
+                    <div class="download-controls">
+                        <div class="select-wrapper">
+                            <select id="qualitySelect">
+                                <option value="" disabled selected>Select Quality</option>
+                                <!-- Formats injected by JS -->
+                            </select>
+                            <i class="fa-solid fa-chevron-down select-icon"></i>
+                        </div>
+                        <button id="downloadBtn" class="primary-btn">
+                            <i class="fa-solid fa-download"></i> Download Video
+                        </button>
+                    </div>
+                    
+                    <div class="progress-container hidden" id="progressContainer">
+                         <p class="progress-text">Preparing download (this may take a minute for 4K video merging)...</p>
+                         <div class="progress-bar-bg">
+                             <div class="progress-bar-fill"></div>
+                         </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <footer>
+            <p>Powered By Omniscient Intelligence &copy; 2026</p>
+        </footer>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
