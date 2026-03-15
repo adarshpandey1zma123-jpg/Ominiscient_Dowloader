@@ -59,6 +59,9 @@ app.get('/api/progress', (req, res) => {
 
     progressClients.set(id, res);
 
+    // Send immediate confirmation that SSE is connected
+    res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+
     req.on('close', () => {
         progressClients.delete(id);
     });
