@@ -1,0 +1,14 @@
+# render.yaml
+services:
+  - type: web
+    name: omniscient-downloader
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: downloads
+      mountPath: /opt/render/project/src/downloads
+      sizeGB: 1
