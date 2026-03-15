@@ -114,25 +114,41 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Generate a unique jobId for this download session
         const jobId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
 
         progressContainer.classList.remove('hidden');
         downloadBtn.disabled = true;
 
-        // Reset progress UI
         progressFill.style.width = '0%';
         progressPercent.textContent = '0%';
         progressText.textContent = 'Connecting to server...';
         progressInfo.textContent = '';
 
-        // Start SSE connection to receive progress updates
         const eventSource = new EventSource(`/api/progress?id=${jobId}`);
 
         eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            if (data.type === 'progress') {
+            if (data.type === 'connected') {
+                const downloadUrl = `/api/download?url=${encodeURIComponent(currentUrl)}&quality=${quality}&jobId=${jobId}`;
+                
+                fetch(downloadUrl).then(res => {
+                    if (!res.ok) {
+                        res.json().then(d => {
+                            alert('Download start error: ' + (d.error || 'Unknown error'));
+                            eventSource.close();
+                            progressContainer.classList.add('hidden');
+                            downloadBtn.disabled = false;
+                        });
+                    }
+                }).catch(err => {
+                    console.error('Download init error:', err);
+                    alert('Could not connect to download server. Check connection.');
+                    eventSource.close();
+                    progressContainer.classList.add('hidden');
+                    downloadBtn.disabled = false;
+                });
+            } else if (data.type === 'progress') {
                 const pct = Math.min(data.percent, 99).toFixed(1);
                 progressFill.style.width = `${pct}%`;
                 progressPercent.textContent = `${pct}%`;
@@ -150,8 +166,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressInfo.textContent = data.filename || '';
                 eventSource.close();
                 
-                // Navigate to the serve endpoint to trigger native browser download
-                // This uses ZERO memory compared to fetch().blob()
                 window.location.href = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
                 
                 setTimeout(() => {
@@ -170,20 +184,5 @@ document.addEventListener('DOMContentLoaded', () => {
         eventSource.onerror = () => {
             eventSource.close();
         };
-
-        // The download starts and we track progress via SSE.
-        // We will only trigger the actual file download prompt when SSE says it's ready.
-        // On mobile, fetch().blob() crashes the browser out of memory. 
-        // We handle the actual download redirect when data.type === 'ready' in the SSE message.
-        fetch(downloadUrl).then(res => {
-            if (!res.ok) {
-                res.json().then(data => alert('Download start error: ' + data.error));
-            }
-        }).catch(err => {
-            console.error('Download init error:', err);
-            alert('Could not start download. Check connection or reload page.');
-            progressContainer.classList.add('hidden');
-            downloadBtn.disabled = false;
-        });
     });
 });
