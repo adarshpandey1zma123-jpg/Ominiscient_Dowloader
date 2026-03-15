@@ -175,8 +175,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // We will only trigger the actual file download prompt when SSE says it's ready.
         // On mobile, fetch().blob() crashes the browser out of memory. 
         // We handle the actual download redirect when data.type === 'ready' in the SSE message.
-        fetch(downloadUrl).catch(err => {
+        fetch(downloadUrl).then(res => {
+            if (!res.ok) {
+                res.json().then(data => alert('Download start error: ' + data.error));
+            }
+        }).catch(err => {
             console.error('Download init error:', err);
+            alert('Could not start download. Check connection or reload page.');
+            progressContainer.classList.add('hidden');
+            downloadBtn.disabled = false;
         });
     });
 });
