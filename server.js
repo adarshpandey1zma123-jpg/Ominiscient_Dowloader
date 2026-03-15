@@ -91,8 +91,7 @@ app.get('/api/info', async (req, res) => {
     dumpSingleJson: true,
     noCheckCertificates: true,
     noWarnings: true,
-    preferFreeFormats: true,
-    ...(fs.existsSync(COOKIES_PATH) && { cookies: COOKIES_PATH }) // ADD THIS
+    ...(fs.existsSync(COOKIES_PATH) && { cookies: COOKIES_PATH })
 });
 
         const specificResolutions = [2160, 1440, 1080, 720, 480, 360];
@@ -170,7 +169,7 @@ app.get('/api/download', async (req, res) => {
     '--newline',
     '--add-header', 'referer:youtube.com',
     '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    ...(fs.existsSync(COOKIES_PATH) ? ['--cookies', COOKIES_PATH] : []) // ADD THIS
+    ...(fs.existsSync(COOKIES_PATH) ? ['--cookies', COOKIES_PATH] : [])
 ];
 
         const ytdlpPath = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
