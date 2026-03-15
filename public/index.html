@@ -66,10 +66,14 @@
                     </div>
                     
                     <div class="progress-container hidden" id="progressContainer">
-                         <p class="progress-text">Preparing download (this may take a minute for 4K video merging)...</p>
-                         <div class="progress-bar-bg">
-                             <div class="progress-bar-fill"></div>
-                         </div>
+                        <div class="progress-header">
+                            <p class="progress-text" id="progressText">Preparing download...</p>
+                            <span class="progress-percent" id="progressPercent">0%</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="progressFill"></div>
+                        </div>
+                        <p class="progress-info" id="progressInfo"></p>
                     </div>
                 </div>
             </div>

@@ -4,7 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fetchBtn = document.getElementById('fetchBtn');
     const loading = document.getElementById('loading');
     const errorMessage = document.getElementById('errorMessage');
-    
+
     const resultSection = document.getElementById('resultSection');
     const videoThumb = document.getElementById('videoThumb');
     const videoTitle = document.getElementById('videoTitle');
@@ -12,7 +12,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const qualitySelect = document.getElementById('qualitySelect');
     const downloadBtn = document.getElementById('downloadBtn');
     const progressContainer = document.getElementById('progressContainer');
-    
+    const progressText = document.getElementById('progressText');
+    const progressFill = document.getElementById('progressFill');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressInfo = document.getElementById('progressInfo');
+
     let currentUrl = '';
 
     function formatTime(seconds) {
@@ -20,10 +24,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
         const s = seconds % 60;
-        if (h > 0) {
-            return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-        }
+        if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
         return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes) return null;
+        if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+        return bytes + ' B';
     }
 
     function showError(msg) {
@@ -52,15 +62,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch(`/api/info?url=${encodeURIComponent(url)}`);
             const data = await res.json();
 
-            if (!res.ok) {
-                throw new Error(data.error || 'Failed to fetch video details.');
-            }
+            if (!res.ok) throw new Error(data.error || 'Failed to fetch video details.');
 
-            // Populate UI
             videoThumb.src = data.thumbnail;
             videoTitle.textContent = data.title;
-            
-            // Handle duration structure (sometimes it's a number, sometimes a string)
+
             let dur = data.duration;
             if (typeof dur === 'string' && dur.includes(':')) {
                 videoDuration.querySelector('span').textContent = dur;
@@ -68,16 +74,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 videoDuration.querySelector('span').textContent = formatTime(Number(dur));
             }
 
-            // Populate qualities
             qualitySelect.innerHTML = '<option value="" disabled selected>Select Quality</option>';
             if (data.formats && data.formats.length > 0) {
                 data.formats.forEach(f => {
+                    const height = f.height;
+                    const size = f.filesize ? formatBytes(f.filesize) : null;
                     const opt = document.createElement('option');
-                    opt.value = f;
-                    let label = `${f}p`;
-                    if (f === 2160) label += ' (4K)';
-                    else if (f === 1440) label += ' (2K)';
-                    else if (f === 1080) label += ' (HD)';
+                    opt.value = height;
+                    let label = `${height}p`;
+                    if (height === 2160) label += ' (4K)';
+                    else if (height === 1440) label += ' (2K)';
+                    else if (height === 1080) label += ' (HD)';
+                    if (size) label += ` — ~${size}`;
                     opt.textContent = label;
                     qualitySelect.appendChild(opt);
                 });
@@ -90,8 +98,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             loading.classList.add('hidden');
             resultSection.classList.remove('hidden');
-
-            // Scroll to results
             resultSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
         } catch (error) {
@@ -108,20 +114,81 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Generate a unique jobId for this download session
+        const jobId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+
         progressContainer.classList.remove('hidden');
         downloadBtn.disabled = true;
-        
-        const downloadUrl = `/api/download?url=${encodeURIComponent(currentUrl)}&quality=${quality}`;
-        
-        // Mobile browsers block programmatic anchor clicks for downloads taking a long time.
-        // Directing window.location is more reliable.
-        window.location.href = downloadUrl;
 
-        // We reset the UI because native browser downloads happen outside the JS sandbox.
-        // It might take the backend a little while to merge the video before the browser "Save As" prompts.
-        setTimeout(() => {
-            progressContainer.classList.add('hidden');
-            downloadBtn.disabled = false;
-        }, 8000);
+        // Reset progress UI
+        progressFill.style.width = '0%';
+        progressPercent.textContent = '0%';
+        progressText.textContent = 'Connecting to server...';
+        progressInfo.textContent = '';
+
+        // Start SSE connection to receive progress updates
+        const eventSource = new EventSource(`/api/progress?id=${jobId}`);
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'progress') {
+                const pct = Math.min(data.percent, 99).toFixed(1);
+                progressFill.style.width = `${pct}%`;
+                progressPercent.textContent = `${pct}%`;
+                progressText.textContent = `Downloading...`;
+                progressInfo.textContent = `${data.totalSize}  |  Speed: ${data.speed}${data.eta ? '  |  ETA: ' + data.eta : ''}`;
+            } else if (data.type === 'merging') {
+                progressFill.style.width = '99%';
+                progressPercent.textContent = '99%';
+                progressText.textContent = 'Merging video + audio...';
+                progressInfo.textContent = 'Please wait, almost done!';
+            } else if (data.type === 'ready') {
+                progressFill.style.width = '100%';
+                progressPercent.textContent = '100%';
+                progressText.textContent = 'Download starting...';
+                progressInfo.textContent = data.filename || '';
+                eventSource.close();
+            } else if (data.type === 'error') {
+                eventSource.close();
+                alert('Download failed: ' + data.message);
+                progressContainer.classList.add('hidden');
+                downloadBtn.disabled = false;
+            }
+        };
+
+        eventSource.onerror = () => {
+            eventSource.close();
+        };
+
+        // Trigger the actual download in the background via the same endpoint
+        const downloadUrl = `/api/download?url=${encodeURIComponent(currentUrl)}&quality=${quality}&jobId=${jobId}`;
+
+        // Use fetch so the download starts in the background while SSE tracks progress
+        fetch(downloadUrl)
+            .then(response => {
+                if (!response.ok) return response.json().then(d => { throw new Error(d.error); });
+                return response.blob();
+            })
+            .then(blob => {
+                const blobUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = `video_${quality}p.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(blobUrl);
+            })
+            .catch(err => {
+                alert(`Download failed: ${err.message}`);
+            })
+            .finally(() => {
+                eventSource.close();
+                setTimeout(() => {
+                    progressContainer.classList.add('hidden');
+                    downloadBtn.disabled = false;
+                }, 2000);
+            });
     });
 });

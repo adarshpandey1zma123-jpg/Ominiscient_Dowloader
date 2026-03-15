@@ -381,33 +381,50 @@ body {
     animation: fadeIn 0.3s;
 }
 
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
 .progress-text {
     font-size: 0.85rem;
     color: var(--text-muted);
-    margin-bottom: 0.5rem;
+}
+
+.progress-percent {
+    font-size: 0.9rem;
+    font-weight: 700;
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .progress-bar-bg {
     width: 100%;
-    height: 6px;
+    height: 8px;
     background: rgba(255,255,255,0.1);
-    border-radius: 3px;
+    border-radius: 4px;
     overflow: hidden;
 }
 
 .progress-bar-fill {
     height: 100%;
-    width: 50%;
+    width: 0%;
     background: var(--gradient-primary);
-    border-radius: 3px;
-    animation: indeterminate 2s infinite linear;
-    transform-origin: 0% 50%;
+    border-radius: 4px;
+    transition: width 0.4s ease;
+    box-shadow: 0 0 10px rgba(138, 43, 226, 0.5);
 }
 
-@keyframes indeterminate {
-    0% { transform: translateX(0) scaleX(0); }
-    40% { transform: translateX(0) scaleX(0.4); }
-    100% { transform: translateX(100%) scaleX(0.5); }
+.progress-info {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+    opacity: 0.8;
+    font-variant-numeric: tabular-nums;
 }
 
 footer {
