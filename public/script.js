@@ -149,6 +149,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressText.textContent = 'Download starting...';
                 progressInfo.textContent = data.filename || '';
                 eventSource.close();
+                
+                // Navigate to the serve endpoint to trigger native browser download
+                // This uses ZERO memory compared to fetch().blob()
+                window.location.href = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
+                
+                setTimeout(() => {
+                    progressContainer.classList.add('hidden');
+                    downloadBtn.disabled = false;
+                }, 4000);
+                
             } else if (data.type === 'error') {
                 eventSource.close();
                 alert('Download failed: ' + data.message);
@@ -161,34 +171,12 @@ document.addEventListener('DOMContentLoaded', () => {
             eventSource.close();
         };
 
-        // Trigger the actual download in the background via the same endpoint
-        const downloadUrl = `/api/download?url=${encodeURIComponent(currentUrl)}&quality=${quality}&jobId=${jobId}`;
-
-        // Use fetch so the download starts in the background while SSE tracks progress
-        fetch(downloadUrl)
-            .then(response => {
-                if (!response.ok) return response.json().then(d => { throw new Error(d.error); });
-                return response.blob();
-            })
-            .then(blob => {
-                const blobUrl = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = blobUrl;
-                a.download = `video_${quality}p.mp4`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(blobUrl);
-            })
-            .catch(err => {
-                alert(`Download failed: ${err.message}`);
-            })
-            .finally(() => {
-                eventSource.close();
-                setTimeout(() => {
-                    progressContainer.classList.add('hidden');
-                    downloadBtn.disabled = false;
-                }, 2000);
-            });
+        // The download starts and we track progress via SSE.
+        // We will only trigger the actual file download prompt when SSE says it's ready.
+        // On mobile, fetch().blob() crashes the browser out of memory. 
+        // We handle the actual download redirect when data.type === 'ready' in the SSE message.
+        fetch(downloadUrl).catch(err => {
+            console.error('Download init error:', err);
+        });
     });
 });

@@ -9,6 +9,38 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Normalize any YouTube URL variant to a standard watch URL
+function normalizeYouTubeUrl(url) {
+    try {
+        // Handle youtu.be short links
+        // Handle youtube.com/shorts/
+        // Handle m.youtube.com
+        // Handle URLs with extra params
+        const parsed = new URL(url);
+        let videoId = null;
+
+        if (parsed.hostname === 'youtu.be') {
+            videoId = parsed.pathname.replace('/', '');
+        } else if (parsed.hostname.includes('youtube.com')) {
+            if (parsed.pathname.startsWith('/shorts/')) {
+                videoId = parsed.pathname.replace('/shorts/', '');
+            } else {
+                videoId = parsed.searchParams.get('v');
+            }
+        }
+
+        if (videoId) {
+            // Clean videoId — remove any trailing slashes or query params
+            videoId = videoId.split('?')[0].split('&')[0].split('/')[0];
+            return `https://www.youtube.com/watch?v=${videoId}`;
+        }
+
+        return url; // Return as-is if we cannot normalize
+    } catch {
+        return url;
+    }
+}
+
 app.use(cors());
 app.use(express.static('public'));
 
@@ -40,8 +72,10 @@ function sendProgress(jobId, data) {
 }
 
 app.get('/api/info', async (req, res) => {
-    const { url } = req.query;
+    let { url } = req.query;
     if (!url) return res.status(400).json({ error: 'URL is required' });
+    url = normalizeYouTubeUrl(url);
+    console.log('Info request for:', url);
 
     try {
         const info = await youtubedl(url, {
@@ -86,14 +120,16 @@ app.get('/api/info', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Info Error:", error);
-        res.status(500).json({ error: 'Failed to fetch video info. It may be restricted or invalid.' });
+        console.error("Info Error:", error.stderr || error.message);
+        res.status(500).json({ error: 'Failed to fetch video info: ' + (error.stderr || error.message || 'Unknown error') });
     }
 });
 
 app.get('/api/download', async (req, res) => {
-    const { url, quality, jobId } = req.query;
+    let { url, quality, jobId } = req.query;
     if (!url || !quality) return res.status(400).json({ error: 'URL and quality are required' });
+    url = normalizeYouTubeUrl(url);
+    console.log('Download request for:', url, 'quality:', quality);
 
     const tempId = crypto.randomBytes(8).toString('hex');
     const downloadsDir = path.join(__dirname, 'downloads');
@@ -104,6 +140,10 @@ app.get('/api/download', async (req, res) => {
 
     const outputPathTemplate = path.join(downloadsDir, `${tempId}---%(title)s_(${quality}p).%(ext)s`);
 
+    // Acknowledge the request immediately so the browser doesn't hang
+    res.json({ success: true, message: 'Download started' });
+
+    // Process in background
     try {
         let formatString = `bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
 
@@ -126,10 +166,8 @@ app.get('/api/download', async (req, res) => {
         const ytdlpPath = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
         const { spawn } = require('child_process');
 
-        console.log(`Starting download for ${url} at ${quality}p`);
+        console.log(`Starting background download for ${url} at ${quality}p`);
 
-        // Regex to parse yt-dlp progress line:
-        // [download]  45.2% of 123.45MiB at  2.34MiB/s ETA 00:30
         const progressRegex = /\[download\]\s+([\d.]+)%\s+of\s+([\d.]+\s*\w+)\s+at\s+([\d.]+\s*\w+\/s)(?:\s+ETA\s+([\d:]+))?/;
 
         await new Promise((resolve, reject) => {
@@ -150,14 +188,13 @@ app.get('/api/download', async (req, res) => {
                             speed: match[3].trim(),
                             eta: match[4] ? match[4].trim() : null
                         };
-                        console.log(`Progress: ${progressData.percent}% of ${progressData.totalSize} at ${progressData.speed}`);
                         if (jobId) sendProgress(jobId, { type: 'progress', ...progressData });
                     }
                 }
             });
 
             child.stderr.on('data', data => {
-                console.error(`yt-dlp: ${data}`);
+                console.error(`yt-dlp error: ${data}`);
             });
 
             child.on('close', code => {
@@ -177,27 +214,43 @@ app.get('/api/download', async (req, res) => {
             throw new Error("File not found after download");
         }
 
-        const finalPath = path.join(downloadsDir, targetFile);
         const downloadName = targetFile.replace(`${tempId}---`, '');
 
         // Notify client that file is ready for download
-        if (jobId) sendProgress(jobId, { type: 'ready', filename: downloadName });
-
-        res.download(finalPath, downloadName, (err) => {
-            if (err) {
-                console.error("Download Error:", err);
-            }
-            fs.unlink(finalPath, (err) => {
-                if (err) console.error("Failed to delete temp file:", err);
-                else console.log(`Deleted temp file: ${finalPath}`);
-            });
-        });
+        // Provide the tempId so the client can request the exact file
+        if (jobId) sendProgress(jobId, { type: 'ready', filename: downloadName, tempId: tempId });
 
     } catch (error) {
-        console.error("Download Error Details:", error);
+        console.error("Background Download Error:", error);
         if (jobId) sendProgress(jobId, { type: 'error', message: 'Download failed.' });
-        res.status(500).json({ error: 'Failed to process video download.' });
     }
+});
+
+// New endpoint to actually serve the file after it's ready
+app.get('/api/serve', (req, res) => {
+    const { tempId, filename } = req.query;
+    if (!tempId || !filename) return res.status(400).send('Missing file parameters');
+
+    const downloadsDir = path.join(__dirname, 'downloads');
+    const files = fs.readdirSync(downloadsDir);
+    const targetFile = files.find(f => f.startsWith(tempId));
+
+    if (!targetFile) {
+         return res.status(404).send('File not found or expired');
+    }
+
+    const finalPath = path.join(downloadsDir, targetFile);
+
+    res.download(finalPath, filename, (err) => {
+        if (err) {
+            console.error("Serve Error:", err);
+        }
+        // Clean up the file after serving
+        fs.unlink(finalPath, (err) => {
+            if (err) console.error("Failed to delete temp file:", err);
+            else console.log(`Deleted temp file: ${finalPath}`);
+        });
+    });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
