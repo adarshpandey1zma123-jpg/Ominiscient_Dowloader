@@ -6,6 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+// Write cookies file from env if available
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
+if (process.env.YOUTUBE_COOKIES_BASE64) {
+    fs.writeFileSync(COOKIES_PATH, Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf8'));
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -82,11 +88,12 @@ app.get('/api/info', async (req, res) => {
 
     try {
         const info = await youtubedl(url, {
-            dumpSingleJson: true,
-            noCheckCertificates: true,
-            noWarnings: true,
-            preferFreeFormats: true
-        });
+    dumpSingleJson: true,
+    noCheckCertificates: true,
+    noWarnings: true,
+    preferFreeFormats: true,
+    ...(fs.existsSync(COOKIES_PATH) && { cookies: COOKIES_PATH }) // ADD THIS
+});
 
         const specificResolutions = [2160, 1440, 1080, 720, 480, 360];
         let formats = [];
@@ -151,20 +158,21 @@ app.get('/api/download', async (req, res) => {
         let formatString = `bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
 
         const args = [
-            url,
-            '--format', formatString,
-            '--merge-output-format', 'mp4',
-            '--output', outputPathTemplate,
-            '--ffmpeg-location', ffmpegStatic,
-            '--no-check-certificates',
-            '--no-warnings',
-            '--concurrent-fragments', '4',
-            '--retries', '3',
-            '--fragment-retries', '3',
-            '--newline',  // Force one-line-per-progress output for easy parsing
-            '--add-header', 'referer:youtube.com',
-            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        ];
+    url,
+    '--format', formatString,
+    '--merge-output-format', 'mp4',
+    '--output', outputPathTemplate,
+    '--ffmpeg-location', ffmpegStatic,
+    '--no-check-certificates',
+    '--no-warnings',
+    '--concurrent-fragments', '4',
+    '--retries', '3',
+    '--fragment-retries', '3',
+    '--newline',
+    '--add-header', 'referer:youtube.com',
+    '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ...(fs.existsSync(COOKIES_PATH) ? ['--cookies', COOKIES_PATH] : []) // ADD THIS
+];
 
         const ytdlpPath = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
         const { spawn } = require('child_process');
