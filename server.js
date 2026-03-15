@@ -113,7 +113,7 @@ app.get('/api/info', async (req, res) => {
             }
         });
 
-        formats = formats.filter(h => specificResolutions.includes(h) || h > 360).sort((a, b) => b - a);
+        formats = formats.filter(h => h >= 144).sort((a, b) => b - a);
         formats = [...new Set(formats)];
 
         // Build format objects with size info
@@ -155,8 +155,7 @@ app.get('/api/download', async (req, res) => {
 
     // Process in background
     try {
-        let formatString = `bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
-
+        let formatString = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/bestvideo+bestaudio/best`;
         const args = [
     url,
     '--format', formatString,
