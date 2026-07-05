@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: omniscient-downloader-backend
+    env: docker
+    plan: free # Can be upgraded to starter/standard as needed
+    dockercontext: .
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
+      - key: DELETE_FROM_CLOUD_AFTER_DOWNLOAD
+        value: "true"
+      - key: RATE_LIMIT_MAX
+        value: "150"
+      - key: DOWNLOAD_LIMIT_MAX
+        value: "20"
+      - key: S3_REGION
+        value: "us-east-1"
+      - key: S3_ACCESS_KEY_ID
+        sync: false # User will fill this in Render Dashboard
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false # User will fill this in Render Dashboard
+      - key: S3_BUCKET_NAME
+        sync: false # User will fill this in Render Dashboard
+      - key: S3_ENDPOINT
+        sync: false # Optional: fill if using Cloudflare R2 / Custom S3 Provider

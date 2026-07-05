@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Omniscient 4K YouTube Downloader</title>
+    <title>Omniscient 8K/4K YouTube Downloader</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -24,7 +24,7 @@
                 <i class="fa-solid fa-cloud-arrow-down gradient-text"></i>
                 <span class="gradient-text">Omniscient</span> Downloader
             </h1>
-            <p class="subtitle">Download YouTube videos in magnificent 4K resolution.<br>Completely free, beautifully fast.</p>
+            <p class="subtitle">Download YouTube videos in magnificent 8K and 4K resolution.<br>Completely free, beautifully fast.</p>
         </header>
 
         <section class="search-section">
@@ -51,17 +51,25 @@
                 <div class="video-info">
                     <h2 id="videoTitle">Video Title Loading...</h2>
                     <p id="videoDuration" class="meta-info"><i class="fa-regular fa-clock"></i> <span>00:00</span></p>
-                    
                     <div class="download-controls">
-                        <div class="select-wrapper">
+                        <div class="select-wrapper format-wrapper">
+                            <select id="formatSelect">
+                                <option value="mp4">Video (MP4)</option>
+                                <option value="mp3">Audio (MP3)</option>
+                            </select>
+                            <i class="fa-solid fa-chevron-down select-icon"></i>
+                        </div>
+
+                        <div class="select-wrapper quality-wrapper" id="qualityWrapper">
                             <select id="qualitySelect">
                                 <option value="" disabled selected>Select Quality</option>
                                 <!-- Formats injected by JS -->
                             </select>
                             <i class="fa-solid fa-chevron-down select-icon"></i>
                         </div>
+                        
                         <button id="downloadBtn" class="primary-btn">
-                            <i class="fa-solid fa-download"></i> Download Video
+                            <i class="fa-solid fa-download"></i> Download
                         </button>
                     </div>
                     

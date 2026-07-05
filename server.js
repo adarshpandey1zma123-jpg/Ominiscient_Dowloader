@@ -1,3 +1,9 @@
+try {
+    require('dotenv').config();
+} catch (e) {
+    console.warn('[Server] dotenv module not found. Proceeding with raw process.env.');
+}
+
 const express = require('express');
 const cors = require('cors');
 const youtubedl = require('youtube-dl-exec');
@@ -5,17 +11,66 @@ const ffmpegStatic = require('ffmpeg-static');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const logger = require('./logger');
+const storage = require('./storage');
+
+let rateLimit = null;
+try {
+    rateLimit = require('express-rate-limit');
+} catch (e) {
+    console.warn('[Server] express-rate-limit module not found. Rate limiting is disabled.');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy is required if deploying behind a load balancer (like Render, Heroku, Cloudflare)
+app.set('trust proxy', 1);
+
+// --- Middleware Configuration ---
+app.use(cors());
+app.use(express.static('public'));
+
+// Apply Rate Limiting if package is installed
+if (rateLimit) {
+    const apiLimiter = rateLimit({
+        windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 mins default
+        max: parseInt(process.env.RATE_LIMIT_MAX) || 150, // 150 requests per IP
+        message: { error: 'Too many requests from this IP. Please try again after 15 minutes.' },
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: (req, res, next, options) => {
+            logger.warn(`Rate limit exceeded for IP: ${req.ip} on route ${req.originalUrl}`);
+            res.status(options.statusCode).json(options.message);
+        }
+    });
+
+    const downloadLimiter = rateLimit({
+        windowMs: parseInt(process.env.DOWNLOAD_LIMIT_WINDOW_MS) || 60 * 60 * 1000, // 1 hour default
+        max: parseInt(process.env.DOWNLOAD_LIMIT_MAX) || 20, // 20 downloads/info lookups per hour
+        message: { error: 'Download limit reached for this hour. Please try again later.' },
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: (req, res, next, options) => {
+            logger.warn(`Download/Info limit reached for IP: ${req.ip} on URL: ${req.query.url}`);
+            res.status(options.statusCode).json(options.message);
+        }
+    });
+
+    app.use('/api/', apiLimiter);
+    app.use('/api/info', downloadLimiter);
+    app.use('/api/download', downloadLimiter);
+}
+
+// Store SSE clients: jobId -> res
+const progressClients = new Map();
+
+// Map to track active jobs meta: tempId -> { s3Key, filename, localPath }
+const activeJobs = new Map();
+
 // Normalize any YouTube URL variant to a standard watch URL
 function normalizeYouTubeUrl(url) {
     try {
-        // Handle youtu.be short links
-        // Handle youtube.com/shorts/
-        // Handle m.youtube.com
-        // Handle URLs with extra params
         const parsed = new URL(url);
         let videoId = null;
 
@@ -30,22 +85,14 @@ function normalizeYouTubeUrl(url) {
         }
 
         if (videoId) {
-            // Clean videoId — remove any trailing slashes or query params
             videoId = videoId.split('?')[0].split('&')[0].split('/')[0];
             return `https://www.youtube.com/watch?v=${videoId}`;
         }
-
-        return url; // Return as-is if we cannot normalize
+        return url;
     } catch {
         return url;
     }
 }
-
-app.use(cors());
-app.use(express.static('public'));
-
-// Store SSE clients: jobId -> res
-const progressClients = new Map();
 
 // SSE endpoint - client connects here to receive progress updates
 app.get('/api/progress', (req, res) => {
@@ -58,12 +105,14 @@ app.get('/api/progress', (req, res) => {
     res.flushHeaders();
 
     progressClients.set(id, res);
+    logger.info(`SSE client connected. Job ID: ${id}`);
 
     // Send immediate confirmation that SSE is connected
     res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 
     req.on('close', () => {
         progressClients.delete(id);
+        logger.info(`SSE client disconnected. Job ID: ${id}`);
     });
 });
 
@@ -74,21 +123,25 @@ function sendProgress(jobId, data) {
     }
 }
 
+// Fetch Video Information
 app.get('/api/info', async (req, res) => {
     let { url } = req.query;
     if (!url) return res.status(400).json({ error: 'URL is required' });
     url = normalizeYouTubeUrl(url);
-    console.log('Info request for:', url);
+    logger.info(`Info request received for URL: ${url} from IP: ${req.ip}`);
 
     try {
         const info = await youtubedl(url, {
             dumpSingleJson: true,
             noCheckCertificates: true,
             noWarnings: true,
-            preferFreeFormats: true
+            preferFreeFormats: true,
+            noPlaylist: true,
+            noCheckFormats: true,
+            skipDownload: true
         });
 
-        const specificResolutions = [2160, 1440, 1080, 720, 480, 360];
+        const specificResolutions = [4320, 2160, 1440, 1080, 720, 480, 360];
         let formats = [];
 
         // Build a map of resolution -> estimated filesize
@@ -98,7 +151,6 @@ app.get('/api/info', async (req, res) => {
                 if (!formats.includes(format.height)) {
                     formats.push(format.height);
                 }
-                // Prefer filesize over filesize_approx
                 const size = format.filesize || format.filesize_approx;
                 if (size && (!filesizeMap[format.height] || size > filesizeMap[format.height])) {
                     filesizeMap[format.height] = size;
@@ -109,7 +161,6 @@ app.get('/api/info', async (req, res) => {
         formats = formats.filter(h => specificResolutions.includes(h) || h > 360).sort((a, b) => b - a);
         formats = [...new Set(formats)];
 
-        // Build format objects with size info
         const formatsWithSize = formats.map(h => ({
             height: h,
             filesize: filesizeMap[h] || null
@@ -123,53 +174,87 @@ app.get('/api/info', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Info Error:", error.stderr || error.message);
-        res.status(500).json({ error: 'Failed to fetch video info: ' + (error.stderr || error.message || 'Unknown error') });
+        const errMsg = error.stderr || error.message || 'Unknown error';
+        logger.error(`Error in /api/info: ${errMsg}`);
+        res.status(500).json({ error: 'Failed to fetch video info: ' + errMsg });
     }
 });
 
+// Download Video (MP4) or Audio (MP3)
 app.get('/api/download', async (req, res) => {
-    let { url, quality, jobId } = req.query;
-    if (!url || !quality) return res.status(400).json({ error: 'URL and quality are required' });
+    let { url, quality, jobId, format } = req.query;
+    if (!url || !jobId) return res.status(400).json({ error: 'URL and jobId are required' });
+    
+    format = format === 'mp3' ? 'mp3' : 'mp4';
     url = normalizeYouTubeUrl(url);
-    console.log('Download request for:', url, 'quality:', quality);
+    
+    logger.info(`Download request received. Format: ${format}, Quality: ${quality || 'audio'}, URL: ${url}`);
 
     const tempId = crypto.randomBytes(8).toString('hex');
     const downloadsDir = path.join(__dirname, 'downloads');
 
     if (!fs.existsSync(downloadsDir)) {
-        fs.mkdirSync(downloadsDir);
+        fs.mkdirSync(downloadsDir, { recursive: true });
     }
 
-    const outputPathTemplate = path.join(downloadsDir, `${tempId}---%(title)s_(${quality}p).%(ext)s`);
+    // Determine output file template
+    let outputPathTemplate;
+    if (format === 'mp3') {
+        outputPathTemplate = path.join(downloadsDir, `${tempId}---%(title)s.%(ext)s`);
+    } else {
+        outputPathTemplate = path.join(downloadsDir, `${tempId}---%(title)s_(${quality}p).%(ext)s`);
+    }
 
-    // Acknowledge the request immediately so the browser doesn't hang
-    res.json({ success: true, message: 'Download started' });
+    // Acknowledge the request immediately to prevent client browser timeout
+    res.json({ success: true, message: 'Download initiated successfully' });
 
-    // Process in background
+    // Process download asynchronously in the background
     try {
-        let formatString = `bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
+        let args = [];
+        if (format === 'mp3') {
+            args = [
+                url,
+                '--extract-audio',
+                '--audio-format', 'mp3',
+                '--audio-quality', '0', // Best quality VBR
+                '--output', outputPathTemplate,
+                '--ffmpeg-location', ffmpegStatic,
+                '--no-check-certificates',
+                '--no-warnings',
+                '--concurrent-fragments', '16',
+                '--buffer-size', '1024K',
+                '--http-chunk-size', '10M',
+                '--newline',
+                '--add-header', 'referer:youtube.com',
+                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ];
+        } else {
+            // Do not force [ext=mp4] on video input stream (as YouTube stores 4K/8K in WebM/VP9/AV1 format).
+            // ffmpeg will automatically merge and remux it to MP4 output container.
+            let formatString = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]`;
+            args = [
+                url,
+                '--format', formatString,
+                '--merge-output-format', 'mp4',
+                '--output', outputPathTemplate,
+                '--ffmpeg-location', ffmpegStatic,
+                '--no-check-certificates',
+                '--no-warnings',
+                '--concurrent-fragments', '16',
+                '--buffer-size', '1024K',
+                '--http-chunk-size', '10M',
+                '--retries', '3',
+                '--fragment-retries', '3',
+                '--newline',
+                '--add-header', 'referer:youtube.com',
+                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ];
+        }
 
-        const args = [
-            url,
-            '--format', formatString,
-            '--merge-output-format', 'mp4',
-            '--output', outputPathTemplate,
-            '--ffmpeg-location', ffmpegStatic,
-            '--no-check-certificates',
-            '--no-warnings',
-            '--concurrent-fragments', '4',
-            '--retries', '3',
-            '--fragment-retries', '3',
-            '--newline',  // Force one-line-per-progress output for easy parsing
-            '--add-header', 'referer:youtube.com',
-            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        ];
-
-        const ytdlpPath = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
+        const ytdlpPath = youtubedl.constants.YOUTUBE_DL_PATH;
         const { spawn } = require('child_process');
 
-        console.log(`Starting background download for ${url} at ${quality}p`);
+        logger.info(`Spawning download process for job: ${jobId}`);
 
         const progressRegex = /\[download\]\s+([\d.]+)%\s+of\s+([\d.]+\s*\w+)\s+at\s+([\d.]+\s*\w+\/s)(?:\s+ETA\s+([\d:]+))?/;
 
@@ -191,13 +276,13 @@ app.get('/api/download', async (req, res) => {
                             speed: match[3].trim(),
                             eta: match[4] ? match[4].trim() : null
                         };
-                        if (jobId) sendProgress(jobId, { type: 'progress', ...progressData });
+                        sendProgress(jobId, { type: 'progress', ...progressData });
                     }
                 }
             });
 
             child.stderr.on('data', data => {
-                console.error(`yt-dlp error: ${data}`);
+                logger.error(`yt-dlp stderr [Job ${jobId}]: ${data}`);
             });
 
             child.on('close', code => {
@@ -207,57 +292,134 @@ app.get('/api/download', async (req, res) => {
             child.on('error', reject);
         });
 
-        console.log(`Download finished for ${url}`);
-        if (jobId) sendProgress(jobId, { type: 'merging' });
+        logger.info(`Download finished successfully for job: ${jobId}`);
+        sendProgress(jobId, { type: 'merging' });
 
+        // Locate the created file in the downloads folder
         const files = fs.readdirSync(downloadsDir);
         const targetFile = files.find(f => f.startsWith(tempId));
 
         if (!targetFile) {
-            throw new Error("File not found after download");
+            throw new Error("File not found on disk after download completion.");
         }
 
         const downloadName = targetFile.replace(`${tempId}---`, '');
+        const finalLocalPath = path.join(downloadsDir, targetFile);
 
-        // Notify client that file is ready for download
-        // Provide the tempId so the client can request the exact file
-        if (jobId) sendProgress(jobId, { type: 'ready', filename: downloadName, tempId: tempId });
+        // Upload to Cloud Storage if S3 is configured and enabled
+        if (storage.isCloudEnabled()) {
+            logger.info(`Uploading file to S3 Cloud Storage: ${downloadName}`);
+            const s3Key = `downloads/${tempId}/${downloadName}`;
+            
+            await storage.uploadFile(finalLocalPath, s3Key);
+            logger.info(`Upload completed. Deleting local temporary file.`);
+            
+            fs.unlinkSync(finalLocalPath);
+            
+            activeJobs.set(tempId, {
+                s3Key,
+                filename: downloadName,
+                localPath: null
+            });
+        } else {
+            activeJobs.set(tempId, {
+                s3Key: null,
+                filename: downloadName,
+                localPath: finalLocalPath
+            });
+        }
+
+        // Notify client that file is ready
+        sendProgress(jobId, { type: 'ready', filename: downloadName, tempId: tempId });
 
     } catch (error) {
-        console.error("Background Download Error:", error);
-        if (jobId) sendProgress(jobId, { type: 'error', message: 'Download failed.' });
+        logger.error(`Background download error for job ${jobId}: ${error.message}`);
+        sendProgress(jobId, { type: 'error', message: 'Failed to download/process video.' });
     }
 });
 
-// New endpoint to actually serve the file after it's ready
-app.get('/api/serve', (req, res) => {
+// Serve the file directly to the client (streaming it secure and privately)
+app.get('/api/serve', async (req, res) => {
     const { tempId, filename } = req.query;
     if (!tempId || !filename) return res.status(400).send('Missing file parameters');
 
-    const downloadsDir = path.join(__dirname, 'downloads');
-    const files = fs.readdirSync(downloadsDir);
-    const targetFile = files.find(f => f.startsWith(tempId));
+    const job = activeJobs.get(tempId);
 
-    if (!targetFile) {
-         return res.status(404).send('File not found or expired');
+    // Support serving local files if not uploaded to cloud (local fallback)
+    if (!job || !job.s3Key) {
+        const localPath = job ? job.localPath : path.join(__dirname, 'downloads', `${tempId}---${filename}`);
+        if (!fs.existsSync(localPath)) {
+            logger.error(`Serve File Not Found locally: ${localPath}`);
+            return res.status(404).send('File not found or expired');
+        }
+
+        logger.info(`Serving file from local disk: ${filename}`);
+        return res.download(localPath, filename, (err) => {
+            if (err) {
+                logger.error(`Error serving local file ${filename}: ${err.message}`);
+            }
+            fs.unlink(localPath, (unlinkErr) => {
+                if (unlinkErr) logger.error(`Failed to delete local temp file: ${unlinkErr.message}`);
+                else logger.info(`Deleted local temp file: ${localPath}`);
+            });
+            activeJobs.delete(tempId);
+        });
     }
 
-    const finalPath = path.join(downloadsDir, targetFile);
+    // Serve from Cloud Storage
+    try {
+        logger.info(`Streaming file from Cloud Storage to browser: ${job.filename}`);
+        
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(job.filename)}"`);
+        res.setHeader('Content-Type', job.filename.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4');
 
-    res.download(finalPath, filename, (err) => {
-        if (err) {
-            console.error("Serve Error:", err);
-        }
-        // Clean up the file after serving
-        fs.unlink(finalPath, (err) => {
-            if (err) console.error("Failed to delete temp file:", err);
-            else console.log(`Deleted temp file: ${finalPath}`);
+        const cloudStream = await storage.downloadStream(job.s3Key);
+        
+        cloudStream.pipe(res);
+
+        cloudStream.on('end', async () => {
+            logger.info(`Finished streaming file from cloud: ${job.s3Key}`);
+            
+            // Delete file from S3 to keep storage usage low/zero (configurable)
+            if (process.env.DELETE_FROM_CLOUD_AFTER_DOWNLOAD !== 'false') {
+                try {
+                    await storage.deleteFile(job.s3Key);
+                    logger.info(`Deleted file from S3: ${job.s3Key}`);
+                } catch (delErr) {
+                    logger.error(`Error deleting file from S3: ${delErr.message}`);
+                }
+            }
+            activeJobs.delete(tempId);
         });
-    });
+
+        cloudStream.on('error', (err) => {
+            logger.error(`Error during cloud streaming: ${err.message}`);
+            if (!res.headersSent) {
+                res.status(500).send('Error streaming file from cloud');
+            }
+            activeJobs.delete(tempId);
+        });
+
+    } catch (error) {
+        logger.error(`Failed to fetch and serve from S3: ${error.message}`);
+        res.status(500).send('Error serving file from cloud storage');
+    }
 });
 
+// Global Error Handler
+app.use((err, req, res, next) => {
+    logger.error(`Unhandled Exception: ${err.message}`, { stack: err.stack });
+    res.status(500).json({ error: 'Internal Server Error' });
+});
+
+// Start Server
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT} (accessible via local network)`);
+    logger.info(`Server running on port ${PORT} (accessible via local network)`);
 });
 
-44
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+    logger.info('SIGTERM signal received. Synchronizing logs and shutting down...');
+    await logger.syncLogs();
+    process.exit(0);
+});

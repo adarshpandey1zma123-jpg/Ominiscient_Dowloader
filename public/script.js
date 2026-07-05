@@ -9,6 +9,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const videoThumb = document.getElementById('videoThumb');
     const videoTitle = document.getElementById('videoTitle');
     const videoDuration = document.getElementById('videoDuration');
+    const formatSelect = document.getElementById('formatSelect');
+    const qualityWrapper = document.getElementById('qualityWrapper');
     const qualitySelect = document.getElementById('qualitySelect');
     const downloadBtn = document.getElementById('downloadBtn');
     const progressContainer = document.getElementById('progressContainer');
@@ -18,6 +20,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressInfo = document.getElementById('progressInfo');
 
     let currentUrl = '';
+
+    // Handle format selection change
+    formatSelect.addEventListener('change', () => {
+        if (formatSelect.value === 'mp3') {
+            qualityWrapper.classList.add('hidden');
+        } else {
+            qualityWrapper.classList.remove('hidden');
+        }
+    });
 
     function formatTime(seconds) {
         if (!seconds) return '00:00';
@@ -75,26 +86,36 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             qualitySelect.innerHTML = '<option value="" disabled selected>Select Quality</option>';
-            if (data.formats && data.formats.length > 0) {
-                data.formats.forEach(f => {
-                    const height = f.height;
-                    const size = f.filesize ? formatBytes(f.filesize) : null;
-                    const opt = document.createElement('option');
-                    opt.value = height;
-                    let label = `${height}p`;
-                    if (height === 2160) label += ' (4K)';
-                    else if (height === 1440) label += ' (2K)';
-                    else if (height === 1080) label += ' (HD)';
-                    if (size) label += ` — ~${size}`;
-                    opt.textContent = label;
-                    qualitySelect.appendChild(opt);
-                });
-            } else {
+            const standardResolutions = [
+                { height: 4320, label: '8K Ultra HD' },
+                { height: 2160, label: '4K Ultra HD' },
+                { height: 1440, label: '2K Quad HD' },
+                { height: 1080, label: 'Full HD' },
+                { height: 720, label: 'HD' },
+                { height: 480, label: 'SD (480p)' },
+                { height: 360, label: 'Low (360p)' }
+            ];
+
+            const availableFormats = data.formats || [];
+            const maxAvailableHeight = availableFormats.length > 0 ? Math.max(...availableFormats.map(f => f.height)) : 720;
+
+            standardResolutions.forEach(res => {
+                const matchedFormat = availableFormats.find(f => f.height === res.height);
+                const size = matchedFormat && matchedFormat.filesize ? formatBytes(matchedFormat.filesize) : null;
+                
                 const opt = document.createElement('option');
-                opt.value = "720";
-                opt.textContent = "720p (Default)";
+                opt.value = res.height;
+                
+                let optionText = `${res.height}p — ${res.label}`;
+                if (size) {
+                    optionText += ` (~${size})`;
+                } else if (res.height > maxAvailableHeight) {
+                    optionText += ` (Best Available / Fallback)`;
+                }
+                
+                opt.textContent = optionText;
                 qualitySelect.appendChild(opt);
-            }
+            });
 
             loading.classList.add('hidden');
             resultSection.classList.remove('hidden');
@@ -108,8 +129,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     downloadBtn.addEventListener('click', () => {
+        const format = formatSelect.value;
         const quality = qualitySelect.value;
-        if (!quality) {
+        
+        if (format === 'mp4' && !quality) {
             alert('Please select a video quality first.');
             return;
         }
@@ -130,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = JSON.parse(event.data);
 
             if (data.type === 'connected') {
-                const downloadUrl = `/api/download?url=${encodeURIComponent(currentUrl)}&quality=${quality}&jobId=${jobId}`;
+                const downloadUrl = `/api/download?url=${encodeURIComponent(currentUrl)}&quality=${quality || ''}&jobId=${jobId}&format=${format}`;
                 
                 fetch(downloadUrl).then(res => {
                     if (!res.ok) {
