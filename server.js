@@ -62,11 +62,46 @@ if (rateLimit) {
     app.use('/api/download', downloadLimiter);
 }
 
+// Function to extract client real IP (handles Cloudflare CF-Connecting-IP & X-Forwarded-For)
+function getClientIp(req) {
+    const cfIp = req.headers['cf-connecting-ip'];
+    if (cfIp) return cfIp;
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) return xff.split(',')[0].trim();
+    return req.socket ? req.socket.remoteAddress : req.ip;
+}
+
 // Store SSE clients: jobId -> res
 const progressClients = new Map();
 
 // Map to track active jobs meta: tempId -> { s3Key, filename, localPath }
 const activeJobs = new Map();
+
+// Function to get a random proxy from list or single proxy URL
+function getRandomProxy() {
+    if (process.env.PROXY_LIST) {
+        const proxies = process.env.PROXY_LIST.split(',').map(p => p.trim()).filter(Boolean);
+        if (proxies.length > 0) {
+            const randomIndex = Math.floor(Math.random() * proxies.length);
+            return proxies[randomIndex];
+        }
+    }
+    return process.env.PROXY_URL || null;
+}
+
+// Helper to mask credentials in proxy logs
+function getSanitizedProxy(proxyUrl) {
+    if (!proxyUrl) return '';
+    try {
+        const parsedProxy = new URL(proxyUrl);
+        if (parsedProxy.password) {
+            parsedProxy.password = '******';
+        }
+        return parsedProxy.toString();
+    } catch (e) {
+        return proxyUrl.replace(/:[^:@]+@/, ':******@');
+    }
+}
 
 // Normalize any YouTube URL variant to a standard watch URL
 function normalizeYouTubeUrl(url) {
@@ -94,14 +129,15 @@ function normalizeYouTubeUrl(url) {
     }
 }
 
-// SSE endpoint - client connects here to receive progress updates
+// SSE endpoint - client connects here to receive progress updates (Cloudflare & Proxy safe)
 app.get('/api/progress', (req, res) => {
     const { id } = req.query;
     if (!id) return res.status(400).json({ error: 'Job ID required' });
 
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx / Cloudflare buffering
     res.flushHeaders();
 
     progressClients.set(id, res);
@@ -110,7 +146,13 @@ app.get('/api/progress', (req, res) => {
     // Send immediate confirmation that SSE is connected
     res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 
+    // Cloudflare anti-timeout heartbeat (ping every 15 seconds)
+    const heartbeat = setInterval(() => {
+        res.write(': ping\n\n');
+    }, 15000);
+
     req.on('close', () => {
+        clearInterval(heartbeat);
         progressClients.delete(id);
         logger.info(`SSE client disconnected. Job ID: ${id}`);
     });
@@ -128,35 +170,51 @@ app.get('/api/info', async (req, res) => {
     let { url } = req.query;
     if (!url) return res.status(400).json({ error: 'URL is required' });
     url = normalizeYouTubeUrl(url);
-    logger.info(`Info request received for URL: ${url} from IP: ${req.ip}`);
+    const clientIp = getClientIp(req);
+    logger.info(`Info request received for URL: ${url} from IP: ${clientIp}`);
 
     try {
-        const info = await youtubedl(url, {
+        const proxyUrl = getRandomProxy();
+        const options = {
             dumpSingleJson: true,
             noCheckCertificates: true,
             noWarnings: true,
             preferFreeFormats: true,
             noPlaylist: true,
             noCheckFormats: true,
-            skipDownload: true
-        });
+            skipDownload: true,
+            geoBypass: true,
+            extractorArgs: 'youtube:player_client=android,ios,web,mweb,tvhtml5',
+            addHeader: [
+                'referer:https://www.youtube.com/',
+                'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                clientIp ? `X-Forwarded-For:${clientIp}` : null
+            ].filter(Boolean)
+        };
+        if (proxyUrl) {
+            options.proxy = proxyUrl;
+            logger.info(`Using proxy for info request: ${getSanitizedProxy(proxyUrl)}`);
+        }
+        const info = await youtubedl(url, options);
 
         const specificResolutions = [4320, 2160, 1440, 1080, 720, 480, 360];
         let formats = [];
 
         // Build a map of resolution -> estimated filesize
         const filesizeMap = {};
-        info.formats.forEach(format => {
-            if (format.vcodec !== 'none' && format.height) {
-                if (!formats.includes(format.height)) {
-                    formats.push(format.height);
+        if (info.formats && Array.isArray(info.formats)) {
+            info.formats.forEach(format => {
+                if (format.vcodec !== 'none' && format.height) {
+                    if (!formats.includes(format.height)) {
+                        formats.push(format.height);
+                    }
+                    const size = format.filesize || format.filesize_approx;
+                    if (size && (!filesizeMap[format.height] || size > filesizeMap[format.height])) {
+                        filesizeMap[format.height] = size;
+                    }
                 }
-                const size = format.filesize || format.filesize_approx;
-                if (size && (!filesizeMap[format.height] || size > filesizeMap[format.height])) {
-                    filesizeMap[format.height] = size;
-                }
-            }
-        });
+            });
+        }
 
         formats = formats.filter(h => specificResolutions.includes(h) || h > 360).sort((a, b) => b - a);
         formats = [...new Set(formats)];
@@ -176,7 +234,7 @@ app.get('/api/info', async (req, res) => {
     } catch (error) {
         const errMsg = error.stderr || error.message || 'Unknown error';
         logger.error(`Error in /api/info: ${errMsg}`);
-        res.status(500).json({ error: 'Failed to fetch video info: ' + errMsg });
+        res.status(500).json({ error: 'Failed to fetch video info. Please verify the URL and try again.' });
     }
 });
 
@@ -187,8 +245,9 @@ app.get('/api/download', async (req, res) => {
     
     format = format === 'mp3' ? 'mp3' : 'mp4';
     url = normalizeYouTubeUrl(url);
+    const clientIp = getClientIp(req);
     
-    logger.info(`Download request received. Format: ${format}, Quality: ${quality || 'audio'}, URL: ${url}`);
+    logger.info(`Download request received. Format: ${format}, Quality: ${quality || 'audio'}, URL: ${url}, IP: ${clientIp}`);
 
     const tempId = crypto.randomBytes(8).toString('hex');
     const downloadsDir = path.join(__dirname, 'downloads');
@@ -210,51 +269,59 @@ app.get('/api/download', async (req, res) => {
 
     // Process download asynchronously in the background
     try {
-        let args = [];
+        const proxyUrl = getRandomProxy();
+        if (proxyUrl) {
+            logger.info(`Using proxy for download job ${jobId}: ${getSanitizedProxy(proxyUrl)}`);
+        }
+
+        const commonArgs = [
+            '--no-check-certificates',
+            '--no-warnings',
+            '--geo-bypass',
+            '--concurrent-fragments', '16',
+            '--buffer-size', '2M',
+            '--http-chunk-size', '10M',
+            '--retries', '10',
+            '--fragment-retries', '10',
+            '--newline',
+            '--extractor-args', 'youtube:player_client=android,ios,web,mweb,tvhtml5',
+            '--add-header', 'referer:https://www.youtube.com/',
+            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        ];
+
+        if (clientIp) {
+            commonArgs.push('--add-header', `X-Forwarded-For:${clientIp}`);
+        }
+
+        let args = [url];
         if (format === 'mp3') {
-            args = [
-                url,
+            args.push(
                 '--extract-audio',
                 '--audio-format', 'mp3',
-                '--audio-quality', '0', // Best quality VBR
+                '--audio-quality', '0',
                 '--output', outputPathTemplate,
                 '--ffmpeg-location', ffmpegStatic,
-                '--no-check-certificates',
-                '--no-warnings',
-                '--concurrent-fragments', '16',
-                '--buffer-size', '1024K',
-                '--http-chunk-size', '10M',
-                '--newline',
-                '--add-header', 'referer:youtube.com',
-                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            ];
+                ...commonArgs
+            );
         } else {
-            // Do not force [ext=mp4] on video input stream (as YouTube stores 4K/8K in WebM/VP9/AV1 format).
-            // ffmpeg will automatically merge and remux it to MP4 output container.
             let formatString = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]`;
-            args = [
-                url,
+            args.push(
                 '--format', formatString,
                 '--merge-output-format', 'mp4',
                 '--output', outputPathTemplate,
                 '--ffmpeg-location', ffmpegStatic,
-                '--no-check-certificates',
-                '--no-warnings',
-                '--concurrent-fragments', '16',
-                '--buffer-size', '1024K',
-                '--http-chunk-size', '10M',
-                '--retries', '3',
-                '--fragment-retries', '3',
-                '--newline',
-                '--add-header', 'referer:youtube.com',
-                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            ];
+                ...commonArgs
+            );
+        }
+
+        if (proxyUrl) {
+            args.push('--proxy', proxyUrl);
         }
 
         const ytdlpPath = youtubedl.constants.YOUTUBE_DL_PATH;
         const { spawn } = require('child_process');
 
-        logger.info(`Spawning download process for job: ${jobId}`);
+        logger.info(`Spawning fast download process for job: ${jobId}`);
 
         const progressRegex = /\[download\]\s+([\d.]+)%\s+of\s+([\d.]+\s*\w+)\s+at\s+([\d.]+\s*\w+\/s)(?:\s+ETA\s+([\d:]+))?/;
 
@@ -287,7 +354,7 @@ app.get('/api/download', async (req, res) => {
 
             child.on('close', code => {
                 if (code === 0) resolve();
-                else reject(new Error(`yt-dlp exited with code ${code}`));
+                else reject(new Error(`yt-dlp process exited with code ${code}`));
             });
             child.on('error', reject);
         });
@@ -334,11 +401,11 @@ app.get('/api/download', async (req, res) => {
 
     } catch (error) {
         logger.error(`Background download error for job ${jobId}: ${error.message}`);
-        sendProgress(jobId, { type: 'error', message: 'Failed to download/process video.' });
+        sendProgress(jobId, { type: 'error', message: 'Failed to download video. Please try again or choose a different quality.' });
     }
 });
 
-// Serve the file directly to the client (streaming it secure and privately)
+// Serve the file directly to the client (streaming it secure, fast and privately)
 app.get('/api/serve', async (req, res) => {
     const { tempId, filename } = req.query;
     if (!tempId || !filename) return res.status(400).send('Missing file parameters');
@@ -354,16 +421,41 @@ app.get('/api/serve', async (req, res) => {
         }
 
         logger.info(`Serving file from local disk: ${filename}`);
-        return res.download(localPath, filename, (err) => {
-            if (err) {
-                logger.error(`Error serving local file ${filename}: ${err.message}`);
-            }
-            fs.unlink(localPath, (unlinkErr) => {
-                if (unlinkErr) logger.error(`Failed to delete local temp file: ${unlinkErr.message}`);
-                else logger.info(`Deleted local temp file: ${localPath}`);
+
+        const stat = fs.statSync(localPath);
+        const fileSize = stat.size;
+        const range = req.headers.range;
+
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+        res.setHeader('Content-Type', filename.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4');
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('X-Accel-Buffering', 'no'); // Disable Cloudflare/Nginx buffer delay
+
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
+            const file = fs.createReadStream(localPath, { start, end });
+
+            res.writeHead(206, {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Content-Length': chunksize,
             });
-            activeJobs.delete(tempId);
-        });
+            file.pipe(res);
+        } else {
+            res.setHeader('Content-Length', fileSize);
+            const stream = fs.createReadStream(localPath);
+            stream.pipe(res);
+            stream.on('end', () => {
+                fs.unlink(localPath, (err) => {
+                    if (err) logger.error(`Failed to delete local temp file: ${err.message}`);
+                    else logger.info(`Deleted local temp file: ${localPath}`);
+                });
+                activeJobs.delete(tempId);
+            });
+        }
+        return;
     }
 
     // Serve from Cloud Storage
@@ -372,6 +464,7 @@ app.get('/api/serve', async (req, res) => {
         
         res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(job.filename)}"`);
         res.setHeader('Content-Type', job.filename.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4');
+        res.setHeader('X-Accel-Buffering', 'no');
 
         const cloudStream = await storage.downloadStream(job.s3Key);
         
@@ -380,7 +473,6 @@ app.get('/api/serve', async (req, res) => {
         cloudStream.on('end', async () => {
             logger.info(`Finished streaming file from cloud: ${job.s3Key}`);
             
-            // Delete file from S3 to keep storage usage low/zero (configurable)
             if (process.env.DELETE_FROM_CLOUD_AFTER_DOWNLOAD !== 'false') {
                 try {
                     await storage.deleteFile(job.s3Key);

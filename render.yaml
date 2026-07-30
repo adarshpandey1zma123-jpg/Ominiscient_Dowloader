@@ -26,3 +26,8 @@ services:
         sync: false # User will fill this in Render Dashboard
       - key: S3_ENDPOINT
         sync: false # Optional: fill if using Cloudflare R2 / Custom S3 Provider
+      - key: PROXY_URL
+        sync: false # Optional: single rotating proxy endpoint
+      - key: PROXY_LIST
+        sync: false # Optional: list of comma-separated proxies
+
