@@ -1,5 +1,5 @@
-# Use Node slim image for a smaller container footprint
-FROM node:18-slim
+# Use Node 20 slim image for modern JS features and AWS SDK compatibility
+FROM node:20-slim
 
 # Install system dependencies:
 # - python3: Required by yt-dlp to run
@@ -19,7 +19,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install production dependencies only to save build time and disk space
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 # Copy remaining source code files
 COPY . .
