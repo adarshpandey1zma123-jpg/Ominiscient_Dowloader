@@ -285,7 +285,7 @@ async function fetchFromYouTubeInnertube(videoId) {
     for (const c of clients) {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
+            const timeout = setTimeout(() => controller.abort(), 8000);
 
             const res = await fetch('https://www.youtube.com/youtubei/v1/player', {
                 method: 'POST',
@@ -319,20 +319,30 @@ async function fetchFromYouTubeInnertube(videoId) {
 
                 if (data.streamingData.formats && Array.isArray(data.streamingData.formats)) {
                     data.streamingData.formats.forEach(f => {
-                        if (f.url && f.height) {
-                            videoStreams.push({ height: f.height, url: f.url, isMuxed: true });
+                        let streamUrl = f.url;
+                        if (!streamUrl && f.signatureCipher) {
+                            const params = new URLSearchParams(f.signatureCipher);
+                            streamUrl = params.get('url');
+                        }
+                        if (streamUrl && f.height) {
+                            videoStreams.push({ height: f.height, url: streamUrl, isMuxed: true });
                         }
                     });
                 }
 
                 if (data.streamingData.adaptiveFormats && Array.isArray(data.streamingData.adaptiveFormats)) {
                     data.streamingData.adaptiveFormats.forEach(f => {
-                        if (f.url) {
+                        let streamUrl = f.url;
+                        if (!streamUrl && f.signatureCipher) {
+                            const params = new URLSearchParams(f.signatureCipher);
+                            streamUrl = params.get('url');
+                        }
+                        if (streamUrl) {
                             if (f.mimeType && f.mimeType.includes('video') && f.height) {
-                                videoStreams.push({ height: f.height, url: f.url, isMuxed: false });
+                                videoStreams.push({ height: f.height, url: streamUrl, isMuxed: false });
                             }
                             if (f.mimeType && f.mimeType.includes('audio')) {
-                                audioStreams.push({ bitrate: f.bitrate || 128000, url: f.url });
+                                audioStreams.push({ bitrate: f.bitrate || 128000, url: streamUrl });
                             }
                         }
                     });
