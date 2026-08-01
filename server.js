@@ -291,7 +291,10 @@ async function fetchFromCobaltApi(url, quality, format) {
 async function fetchFromYouTubeInnertube(videoId) {
     const clients = [
         { clientName: 'ANDROID_TESTSUITE', clientVersion: '1.9', userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' },
+        { clientName: 'ANDROID_VR', clientVersion: '1.59.0', userAgent: 'com.google.android.apps.youtube.vr.oculus/1.59.0 (Linux; U; Android 12)' },
+        { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '5.20230725.07.00', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' },
         { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', userAgent: 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/537.42 TV Safari/537.42' },
+        { clientName: 'IOS', clientVersion: '19.09.3', userAgent: 'com.google.ios.youtube/19.09.3 (iPhone16,2; U; CPU iOS 17_3_1 like Mac OS X)' },
         { clientName: 'ANDROID', clientVersion: '19.09.37', userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' }
     ];
 
