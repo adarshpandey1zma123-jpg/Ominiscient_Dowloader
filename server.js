@@ -580,7 +580,6 @@ async function getYouTubeVideoDuration(videoId) {
     }
     return 0;
 }
-}
 
 // SSE endpoint - client connects here to receive progress updates
 app.get('/api/progress', (req, res) => {
