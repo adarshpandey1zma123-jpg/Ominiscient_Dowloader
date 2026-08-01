@@ -221,62 +221,67 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
     });
 }
 
-// Cobalt API v10 Engine for Direct YouTube Downloads (Production Proven)
+// Multi-Instance Cobalt API Engine (Supports both v7 and v10 protocols)
 async function fetchFromCobaltApi(url, quality, format) {
+    const videoId = extractVideoId(url);
+    const fullUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
+
     const cobaltEndpoints = [
         'https://api.cobalt.tools',
-        'https://cobalt-api.hyper.lol',
+        'https://cobalt-api.kavin.rocks/api/json',
+        'https://co.wuk.sh/api/json',
         'https://cobalt.api.timelessnesses.me'
     ];
 
     const qualityMap = { '360': '360', '480': '480', '720': '720', '1080': '1080', '1440': '1440', '2160': '2160', '4320': '4320' };
     const vQuality = qualityMap[String(quality)] || '720';
 
+    const payloads = [
+        // Cobalt v10 standard
+        { url: fullUrl, videoQuality: vQuality, downloadMode: format === 'mp3' ? 'audio' : 'auto' },
+        // Cobalt v7 standard
+        { url: fullUrl, videoQuality: vQuality, isAudioOnly: format === 'mp3' },
+        // Simple fallback
+        { url: fullUrl }
+    ];
+
     for (const baseUrl of cobaltEndpoints) {
-        try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 10000);
+        for (const payload of payloads) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 6000);
 
-            const payload = {
-                url: url,
-                videoQuality: vQuality,
-                filenameStyle: 'basic',
-                downloadMode: format === 'mp3' ? 'audio' : 'auto'
-            };
+                const res = await fetch(baseUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
 
-            const res = await fetch(baseUrl, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload),
-                signal: controller.signal
-            });
-            clearTimeout(timeout);
+                if (!res.ok) continue;
+                const data = await res.json();
 
-            if (!res.ok) {
-                logger.warn(`Cobalt ${baseUrl} HTTP ${res.status}`);
-                continue;
+                if (data.status === 'tunnel' && data.url) {
+                    return { type: 'tunnel', url: data.url, filename: data.filename || `video.${format}` };
+                }
+                if (data.status === 'redirect' && data.url) {
+                    return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
+                }
+                if (data.status === 'picker' && data.picker && data.picker.length > 0) {
+                    const pick = data.picker[0];
+                    return { type: pick.type || 'redirect', url: pick.url, filename: data.filename || `video.${format}` };
+                }
+                if (data.url) {
+                    return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
+                }
+            } catch (e) {
+                // Continue trying
             }
-            const data = await res.json();
-            logger.info(`Cobalt response from ${baseUrl}: status=${data.status}`);
-
-            if (data.status === 'tunnel' && data.url) {
-                return { type: 'tunnel', url: data.url, filename: data.filename || `video.${format}` };
-            }
-            if (data.status === 'redirect' && data.url) {
-                return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
-            }
-            if (data.status === 'picker' && data.picker && data.picker.length > 0) {
-                const pick = data.picker[0];
-                return { type: pick.type || 'redirect', url: pick.url, filename: data.filename || `video.${format}` };
-            }
-            if (data.url) {
-                return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
-            }
-        } catch (e) {
-            logger.warn(`Cobalt ${baseUrl} error: ${e.message}`);
         }
     }
     return null;
@@ -327,30 +332,22 @@ async function fetchFromYouTubeInnertube(videoId) {
 
                 if (data.streamingData.formats && Array.isArray(data.streamingData.formats)) {
                     data.streamingData.formats.forEach(f => {
-                        let streamUrl = f.url;
-                        if (!streamUrl && f.signatureCipher) {
-                            const params = new URLSearchParams(f.signatureCipher);
-                            streamUrl = params.get('url');
-                        }
-                        if (streamUrl && f.height) {
-                            videoStreams.push({ height: f.height, url: streamUrl, isMuxed: true });
+                        // Only use direct URLs, discard signatureCipher since un-deciphered URLs return HTTP 403
+                        if (f.url && f.height) {
+                            videoStreams.push({ height: f.height, url: f.url, isMuxed: true });
                         }
                     });
                 }
 
                 if (data.streamingData.adaptiveFormats && Array.isArray(data.streamingData.adaptiveFormats)) {
                     data.streamingData.adaptiveFormats.forEach(f => {
-                        let streamUrl = f.url;
-                        if (!streamUrl && f.signatureCipher) {
-                            const params = new URLSearchParams(f.signatureCipher);
-                            streamUrl = params.get('url');
-                        }
-                        if (streamUrl) {
+                        // Only use direct URLs, discard signatureCipher since un-deciphered URLs return HTTP 403
+                        if (f.url) {
                             if (f.mimeType && f.mimeType.includes('video') && f.height) {
-                                videoStreams.push({ height: f.height, url: streamUrl, isMuxed: false });
+                                videoStreams.push({ height: f.height, url: f.url, isMuxed: false });
                             }
                             if (f.mimeType && f.mimeType.includes('audio')) {
-                                audioStreams.push({ bitrate: f.bitrate || 128000, url: streamUrl });
+                                audioStreams.push({ bitrate: f.bitrate || 128000, url: f.url });
                             }
                         }
                     });
