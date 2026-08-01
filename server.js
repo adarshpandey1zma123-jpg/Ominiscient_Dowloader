@@ -221,54 +221,62 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
     });
 }
 
-// Ultra-Fast Multi-Payload Cobalt API Engine for Direct Downloads
+// Cobalt API v10 Engine for Direct YouTube Downloads (Production Proven)
 async function fetchFromCobaltApi(url, quality, format) {
-    const cobaltInstances = [
-        'https://api.cobalt.tools/',
-        'https://api.cobalt.tools/api/json',
-        'https://co.wuk.sh/api/json',
-        'https://cobalt-api.kavin.rocks/api/json'
+    const cobaltEndpoints = [
+        'https://api.cobalt.tools',
+        'https://cobalt-api.hyper.lol',
+        'https://cobalt.api.timelessnesses.me'
     ];
 
-    const payloads = [
-        { url: url, videoQuality: String(quality || '1080'), isAudioOnly: format === 'mp3' },
-        { url: url, downloadMode: format === 'mp3' ? 'audio' : 'video', videoQuality: String(quality || '1080') },
-        { url: url }
-    ];
+    const qualityMap = { '360': '360', '480': '480', '720': '720', '1080': '1080', '1440': '1440', '2160': '2160', '4320': '4320' };
+    const vQuality = qualityMap[String(quality)] || '720';
 
-    for (const endpoint of cobaltInstances) {
-        for (const payload of payloads) {
-            try {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 6000);
+    for (const baseUrl of cobaltEndpoints) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
 
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    },
-                    body: JSON.stringify(payload),
-                    signal: controller.signal
-                });
-                clearTimeout(timeout);
+            const payload = {
+                url: url,
+                videoQuality: vQuality,
+                filenameStyle: 'basic',
+                downloadMode: format === 'mp3' ? 'audio' : 'auto'
+            };
 
-                if (!res.ok) continue;
-                const data = await res.json();
+            const res = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
 
-                if (data && (data.status === 'redirect' || data.status === 'tunnel' || data.status === 'stream') && data.url) {
-                    return data.url;
-                }
-                if (data && data.picker && Array.isArray(data.picker) && data.picker.length > 0) {
-                    return data.picker[0].url;
-                }
-                if (data && data.url) {
-                    return data.url;
-                }
-            } catch (e) {
-                // Try next
+            if (!res.ok) {
+                logger.warn(`Cobalt ${baseUrl} HTTP ${res.status}`);
+                continue;
             }
+            const data = await res.json();
+            logger.info(`Cobalt response from ${baseUrl}: status=${data.status}`);
+
+            if (data.status === 'tunnel' && data.url) {
+                return { type: 'tunnel', url: data.url, filename: data.filename || `video.${format}` };
+            }
+            if (data.status === 'redirect' && data.url) {
+                return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
+            }
+            if (data.status === 'picker' && data.picker && data.picker.length > 0) {
+                const pick = data.picker[0];
+                return { type: pick.type || 'redirect', url: pick.url, filename: data.filename || `video.${format}` };
+            }
+            if (data.url) {
+                return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
+            }
+        } catch (e) {
+            logger.warn(`Cobalt ${baseUrl} error: ${e.message}`);
         }
     }
     return null;
@@ -671,17 +679,40 @@ app.get('/api/download', async (req, res) => {
     res.json({ success: true, message: 'Download initiated successfully' });
 
     try {
-        // === TIER 0: Cobalt Direct Download Link (Instant 0-Second Download) ===
+        // === TIER 0: Cobalt Direct Download (Instant High-Speed) ===
         sendProgress(jobId, { type: 'progress', percent: 5, totalSize: 'Connecting...', speed: 'High Speed Direct', eta: null });
-        const cobaltDirectUrl = await fetchFromCobaltApi(url, quality, format);
-        if (cobaltDirectUrl) {
-            logger.info(`[Job ${jobId}] Cobalt Direct Download URL acquired: ${cobaltDirectUrl}`);
-            sendProgress(jobId, {
-                type: 'ready',
-                directUrl: cobaltDirectUrl,
-                filename: `video_${quality || 'HD'}.${format}`
-            });
-            return;
+        try {
+            const cobaltResult = await fetchFromCobaltApi(url, quality, format);
+            if (cobaltResult && cobaltResult.url) {
+                logger.info(`[Job ${jobId}] Cobalt ${cobaltResult.type}: ${cobaltResult.url.substring(0, 80)}...`);
+
+                if (cobaltResult.type === 'tunnel') {
+                    // Tunnel: download through our server to client
+                    sendProgress(jobId, { type: 'progress', percent: 10, totalSize: 'Downloading via tunnel...', speed: 'High Speed', eta: null });
+                    const sanitizedTitle = (cobaltResult.filename || `video_${quality}`).replace(/[/\\?%*:|"<>]/g, '_');
+                    const finalFilename = `${tempId}---${sanitizedTitle}`;
+                    const finalPath = path.join(downloadsDir, finalFilename);
+
+                    await downloadStreamToFile(cobaltResult.url, finalPath);
+
+                    const downloadName = finalFilename.replace(`${tempId}---`, '');
+                    activeJobs.set(tempId, { s3Key: null, filename: downloadName, localPath: finalPath });
+                    sendProgress(jobId, { type: 'ready', filename: downloadName, tempId: tempId });
+                    logger.info(`[Job ${jobId}] ✅ Cobalt tunnel download SUCCESS`);
+                    return;
+                } else {
+                    // Redirect: send direct URL to client browser
+                    sendProgress(jobId, {
+                        type: 'ready',
+                        directUrl: cobaltResult.url,
+                        filename: cobaltResult.filename || `video_${quality || 'HD'}.${format}`
+                    });
+                    logger.info(`[Job ${jobId}] ✅ Cobalt redirect download SUCCESS`);
+                    return;
+                }
+            }
+        } catch (cobaltErr) {
+            logger.warn(`[Job ${jobId}] Cobalt TIER 0 failed: ${cobaltErr.message}`);
         }
 
         // === TIER 1: YouTube Innertube / Stream Download ===

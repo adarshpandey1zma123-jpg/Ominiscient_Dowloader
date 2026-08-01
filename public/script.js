@@ -189,7 +189,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressInfo.textContent = data.filename || '';
                 eventSource.close();
                 
-                window.location.href = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
+                if (data.directUrl) {
+                    // Cobalt redirect: direct CDN link
+                    const a = document.createElement('a');
+                    a.href = data.directUrl;
+                    a.download = data.filename || 'download';
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } else if (data.tempId) {
+                    // Local server file
+                    window.location.href = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
+                }
                 
                 setTimeout(() => {
                     progressContainer.classList.add('hidden');
