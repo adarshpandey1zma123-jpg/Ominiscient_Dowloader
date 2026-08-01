@@ -380,10 +380,11 @@ async function fetchFromYouTubeInnertube(videoId) {
 
 // 4-Tier Permanent API Fallback Engine (Innertube + Piped + Invidious + YouTube oEmbed)
 async function fetchVideoInfoFallback(videoId) {
-    // Tier 0: YouTube Direct Innertube API (ANDROID_TESTSUITE / TVHTML5)
+    let result = null;
+
+    // Tier 0: YouTube Direct Innertube API
     try {
-        const innertubeData = await fetchFromYouTubeInnertube(videoId);
-        if (innertubeData) return innertubeData;
+        result = await fetchFromYouTubeInnertube(videoId);
     } catch (itErr) {
         logger.warn(`Innertube engine fallback error: ${itErr.message}`);
     }
@@ -394,144 +395,191 @@ async function fetchVideoInfoFallback(videoId) {
     };
 
     // Tier 1: Healthy Active Piped API Instances
-    const pipedInstances = [
-        `https://pipedapi.kavin.rocks/streams/${videoId}`,
-        `https://pipedapi.tokhmi.xyz/streams/${videoId}`,
-        `https://pipedapi.moomoo.me/streams/${videoId}`,
-        `https://pipedapi.sync.yt/streams/${videoId}`,
-        `https://piped-api.lunar.icu/streams/${videoId}`,
-        `https://pipedapi.adminforge.de/streams/${videoId}`,
-        `https://pipedapi.mha.fi/streams/${videoId}`
-    ];
+    if (!result) {
+        const pipedInstances = [
+            `https://pipedapi.kavin.rocks/streams/${videoId}`,
+            `https://pipedapi.tokhmi.xyz/streams/${videoId}`,
+            `https://pipedapi.moomoo.me/streams/${videoId}`,
+            `https://pipedapi.sync.yt/streams/${videoId}`,
+            `https://piped-api.lunar.icu/streams/${videoId}`,
+            `https://pipedapi.adminforge.de/streams/${videoId}`,
+            `https://pipedapi.mha.fi/streams/${videoId}`
+        ];
 
-    for (const endpoint of pipedInstances) {
-        try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4000);
+        for (const endpoint of pipedInstances) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 4000);
 
-            const res = await fetch(endpoint, { headers, signal: controller.signal });
-            clearTimeout(timeout);
+                const res = await fetch(endpoint, { headers, signal: controller.signal });
+                clearTimeout(timeout);
 
-            if (!res.ok) continue;
-            const data = await res.json();
+                if (!res.ok) continue;
+                const data = await res.json();
 
-            if (data && data.title) {
-                const specificResolutions = [4320, 2160, 1440, 1080, 720, 480, 360];
-                let formats = [];
-                const filesizeMap = {};
+                if (data && data.title) {
+                    const specificResolutions = [4320, 2160, 1440, 1080, 720, 480, 360];
+                    let formats = [];
+                    const filesizeMap = {};
 
-                if (data.videoStreams && Array.isArray(data.videoStreams)) {
-                    data.videoStreams.forEach(stream => {
-                        if (stream.height) {
-                            if (!formats.includes(stream.height)) {
-                                formats.push(stream.height);
+                    if (data.videoStreams && Array.isArray(data.videoStreams)) {
+                        data.videoStreams.forEach(stream => {
+                            if (stream.height) {
+                                if (!formats.includes(stream.height)) {
+                                    formats.push(stream.height);
+                                }
+                                if (stream.contentLength && (!filesizeMap[stream.height] || stream.contentLength > filesizeMap[stream.height])) {
+                                    filesizeMap[stream.height] = stream.contentLength;
+                                }
                             }
-                            if (stream.contentLength && (!filesizeMap[stream.height] || stream.contentLength > filesizeMap[stream.height])) {
-                                filesizeMap[stream.height] = stream.contentLength;
-                            }
-                        }
-                    });
+                        });
+                    }
+
+                    formats = formats.filter(h => specificResolutions.includes(h) || h > 360).sort((a, b) => b - a);
+                    formats = [...new Set(formats)];
+                    if (formats.length === 0) formats = [1080, 720, 480, 360];
+
+                    result = {
+                        title: data.title,
+                        thumbnail: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                        duration: data.duration || 0,
+                        formats: formats.map(h => ({ height: h, filesize: filesizeMap[h] || null })),
+                        rawStreams: data
+                    };
+                    break;
                 }
-
-                formats = formats.filter(h => specificResolutions.includes(h) || h > 360).sort((a, b) => b - a);
-                formats = [...new Set(formats)];
-                if (formats.length === 0) formats = [1080, 720, 480, 360];
-
-                return {
-                    title: data.title,
-                    thumbnail: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                    duration: data.duration || 0,
-                    formats: formats.map(h => ({ height: h, filesize: filesizeMap[h] || null })),
-                    rawStreams: data
-                };
+            } catch (e) {
+                logger.warn(`Piped API failed (${endpoint}): ${e.message}`);
             }
-        } catch (e) {
-            logger.warn(`Piped API failed (${endpoint}): ${e.message}`);
         }
     }
 
     // Tier 2: Healthy Active Invidious API Instances
-    const invidiousInstances = [
-        `https://yewtu.be/api/v1/videos/${videoId}`,
-        `https://invidious.nerdvpn.de/api/v1/videos/${videoId}`,
-        `https://invidious.flokinet.to/api/v1/videos/${videoId}`,
-        `https://invidious.drgns.space/api/v1/videos/${videoId}`,
-        `https://iv.melmac.space/api/v1/videos/${videoId}`
-    ];
+    if (!result) {
+        const invidiousInstances = [
+            `https://yewtu.be/api/v1/videos/${videoId}`,
+            `https://invidious.nerdvpn.de/api/v1/videos/${videoId}`,
+            `https://invidious.flokinet.to/api/v1/videos/${videoId}`,
+            `https://invidious.drgns.space/api/v1/videos/${videoId}`,
+            `https://iv.melmac.space/api/v1/videos/${videoId}`
+        ];
 
-    for (const endpoint of invidiousInstances) {
+        for (const endpoint of invidiousInstances) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 4000);
+
+                const res = await fetch(endpoint, { headers, signal: controller.signal });
+                clearTimeout(timeout);
+
+                if (!res.ok) continue;
+                const data = await res.json();
+
+                if (data && data.title) {
+                    let videoStreams = [];
+                    let audioStreams = [];
+
+                    if (data.formatStreams && Array.isArray(data.formatStreams)) {
+                        data.formatStreams.forEach(fs => {
+                            const h = parseInt(fs.qualityLabel || fs.height, 10);
+                            if (h && fs.url) {
+                                videoStreams.push({ height: h, url: fs.url, qualityLabel: fs.qualityLabel });
+                            }
+                        });
+                    }
+
+                    if (data.adaptiveFormats && Array.isArray(data.adaptiveFormats)) {
+                        data.adaptiveFormats.forEach(af => {
+                            if (af.type && af.type.includes('video') && af.height && af.url) {
+                                videoStreams.push({ height: af.height, url: af.url, qualityLabel: `${af.height}p` });
+                            }
+                            if (af.type && af.type.includes('audio') && af.url) {
+                                audioStreams.push({ bitrate: af.bitrate || 128000, url: af.url });
+                            }
+                        });
+                    }
+
+                    let formats = videoStreams.map(s => s.height).filter(Boolean);
+                    formats = [...new Set(formats)].sort((a, b) => b - a);
+                    if (formats.length === 0) formats = [1080, 720, 480, 360];
+
+                    result = {
+                        title: data.title,
+                        thumbnail: (data.videoThumbnails && data.videoThumbnails[0]) ? data.videoThumbnails[0].url : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                        duration: data.lengthSeconds || 0,
+                        formats: formats.map(h => ({ height: h, filesize: null })),
+                        rawStreams: { videoStreams, audioStreams }
+                    };
+                    break;
+                }
+            } catch (e) {
+                logger.warn(`Invidious API failed (${endpoint}): ${e.message}`);
+            }
+        }
+    }
+
+    // Tier 3: Official YouTube oEmbed API
+    if (!result) {
         try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4000);
-
-            const res = await fetch(endpoint, { headers, signal: controller.signal });
-            clearTimeout(timeout);
-
-            if (!res.ok) continue;
-            const data = await res.json();
-
-            if (data && data.title) {
-                let videoStreams = [];
-                let audioStreams = [];
-
-                if (data.formatStreams && Array.isArray(data.formatStreams)) {
-                    data.formatStreams.forEach(fs => {
-                        const h = parseInt(fs.qualityLabel || fs.height, 10);
-                        if (h && fs.url) {
-                            videoStreams.push({ height: h, url: fs.url, qualityLabel: fs.qualityLabel });
-                        }
-                    });
+            const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+            const res = await fetch(oembedUrl, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.title) {
+                    result = {
+                        title: data.title,
+                        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                        duration: 0,
+                        formats: [1080, 720, 480, 360].map(h => ({ height: h, filesize: null })),
+                        rawStreams: null
+                    };
                 }
-
-                if (data.adaptiveFormats && Array.isArray(data.adaptiveFormats)) {
-                    data.adaptiveFormats.forEach(af => {
-                        if (af.type && af.type.includes('video') && af.height && af.url) {
-                            videoStreams.push({ height: af.height, url: af.url, qualityLabel: `${af.height}p` });
-                        }
-                        if (af.type && af.type.includes('audio') && af.url) {
-                            audioStreams.push({ bitrate: af.bitrate || 128000, url: af.url });
-                        }
-                    });
-                }
-
-                let formats = videoStreams.map(s => s.height).filter(Boolean);
-                formats = [...new Set(formats)].sort((a, b) => b - a);
-                if (formats.length === 0) formats = [1080, 720, 480, 360];
-
-                return {
-                    title: data.title,
-                    thumbnail: (data.videoThumbnails && data.videoThumbnails[0]) ? data.videoThumbnails[0].url : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                    duration: data.lengthSeconds || 0,
-                    formats: formats.map(h => ({ height: h, filesize: null })),
-                    rawStreams: { videoStreams, audioStreams }
-                };
             }
-        } catch (e) {
-            logger.warn(`Invidious API failed (${endpoint}): ${e.message}`);
+        } catch (oeErr) {
+            logger.error(`YouTube oEmbed fallback failed: ${oeErr.message}`);
         }
     }
 
-    // Tier 3: Official YouTube oEmbed API (Guaranteed 100% Success Rate for metadata)
+    // Direct YouTube HTML Duration Resolution (Guarantees non-zero video duration)
+    if (result && (!result.duration || result.duration === 0)) {
+        result.duration = await getYouTubeVideoDuration(videoId);
+    }
+
+    return result;
+}
+
+// Fallback duration fetcher directly from YouTube watch HTML
+async function getYouTubeVideoDuration(videoId) {
     try {
-        const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-        const res = await fetch(oembedUrl, { headers });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9'
+            },
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
         if (res.ok) {
-            const data = await res.json();
-            if (data && data.title) {
-                return {
-                    title: data.title,
-                    thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                    duration: 0,
-                    formats: [1080, 720, 480, 360].map(h => ({ height: h, filesize: null })),
-                    rawStreams: null
-                };
+            const html = await res.text();
+            const match = html.match(/"lengthSeconds":"(\d+)"/);
+            if (match && match[1]) {
+                return parseInt(match[1], 10);
+            }
+            const isoMatch = html.match(/itemprop="duration"\s+content="PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"/i);
+            if (isoMatch) {
+                const hours = parseInt(isoMatch[1] || '0', 10);
+                const minutes = parseInt(isoMatch[2] || '0', 10);
+                const seconds = parseInt(isoMatch[3] || '0', 10);
+                return hours * 3600 + minutes * 60 + seconds;
             }
         }
-    } catch (oeErr) {
-        logger.error(`YouTube oEmbed fallback failed: ${oeErr.message}`);
+    } catch (e) {
+        // Ignore fallback errors
     }
-
-    return null;
+    return 0;
+}
 }
 
 // SSE endpoint - client connects here to receive progress updates
