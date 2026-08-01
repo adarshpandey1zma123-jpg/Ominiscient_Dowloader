@@ -221,7 +221,7 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
     });
 }
 
-// Multi-Instance Cobalt API Engine (Supports both v7 and v10 protocols)
+// Ultra-Fast Parallel Cobalt API Engine
 async function fetchFromCobaltApi(url, quality, format) {
     const videoId = extractVideoId(url);
     const fullUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
@@ -230,78 +230,77 @@ async function fetchFromCobaltApi(url, quality, format) {
         'https://api.cobalt.tools',
         'https://cobalt-api.kavin.rocks/api/json',
         'https://co.wuk.sh/api/json',
-        'https://cobalt.api.timelessnesses.me'
+        'https://cobalt.api.timelessnesses.me',
+        'https://cobalt.q137.net/api/json'
     ];
 
     const qualityMap = { '360': '360', '480': '480', '720': '720', '1080': '1080', '1440': '1440', '2160': '2160', '4320': '4320' };
     const vQuality = qualityMap[String(quality)] || '720';
 
-    const payloads = [
-        // Cobalt v10 standard
-        { url: fullUrl, videoQuality: vQuality, downloadMode: format === 'mp3' ? 'audio' : 'auto' },
-        // Cobalt v7 standard
-        { url: fullUrl, videoQuality: vQuality, isAudioOnly: format === 'mp3' },
-        // Simple fallback
-        { url: fullUrl }
-    ];
+    const payload = {
+        url: fullUrl,
+        videoQuality: vQuality,
+        downloadMode: format === 'mp3' ? 'audio' : 'auto'
+    };
 
-    for (const baseUrl of cobaltEndpoints) {
-        for (const payload of payloads) {
-            try {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 6000);
+    const requests = cobaltEndpoints.map(async (baseUrl) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3500);
 
-                const res = await fetch(baseUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    },
-                    body: JSON.stringify(payload),
-                    signal: controller.signal
-                });
-                clearTimeout(timeout);
+        try {
+            const res = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                },
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
 
-                if (!res.ok) continue;
-                const data = await res.json();
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
 
-                if (data.status === 'tunnel' && data.url) {
-                    return { type: 'tunnel', url: data.url, filename: data.filename || `video.${format}` };
-                }
-                if (data.status === 'redirect' && data.url) {
-                    return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
-                }
-                if (data.status === 'picker' && data.picker && data.picker.length > 0) {
-                    const pick = data.picker[0];
-                    return { type: pick.type || 'redirect', url: pick.url, filename: data.filename || `video.${format}` };
-                }
-                if (data.url) {
-                    return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
-                }
-            } catch (e) {
-                // Continue trying
+            if (data.status === 'tunnel' && data.url) {
+                return { type: 'tunnel', url: data.url, filename: data.filename || `video.${format}` };
             }
+            if ((data.status === 'redirect' || data.status === 'stream') && data.url) {
+                return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
+            }
+            if (data.status === 'picker' && data.picker && data.picker.length > 0) {
+                return { type: 'redirect', url: data.picker[0].url, filename: data.filename || `video.${format}` };
+            }
+            if (data.url) {
+                return { type: 'redirect', url: data.url, filename: data.filename || `video.${format}` };
+            }
+            throw new Error('No URL returned');
+        } catch (e) {
+            clearTimeout(timeout);
+            throw e;
         }
+    });
+
+    try {
+        return await Promise.any(requests);
+    } catch (e) {
+        logger.warn(`All Cobalt parallel instances failed`);
+        return null;
     }
-    return null;
 }
 
-// Direct YouTube Innertube Client (ANDROID_TESTSUITE & TVHTML5) - Zero Bot Verification on Datacenter IPs!
+// Direct YouTube Innertube Client (Fast 3s timeout per client)
 async function fetchFromYouTubeInnertube(videoId) {
     const clients = [
         { clientName: 'ANDROID_TESTSUITE', clientVersion: '1.9', userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' },
-        { clientName: 'ANDROID_VR', clientVersion: '1.59.0', userAgent: 'com.google.android.apps.youtube.vr.oculus/1.59.0 (Linux; U; Android 12)' },
-        { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '5.20230725.07.00', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' },
-        { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', userAgent: 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/537.42 TV Safari/537.42' },
-        { clientName: 'IOS', clientVersion: '19.09.3', userAgent: 'com.google.ios.youtube/19.09.3 (iPhone16,2; U; CPU iOS 17_3_1 like Mac OS X)' },
-        { clientName: 'ANDROID', clientVersion: '19.09.37', userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' }
+        { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', userAgent: 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/537.42 TV Safari/537.42' }
     ];
 
     for (const c of clients) {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 8000);
+            const timeout = setTimeout(() => controller.abort(), 3000);
 
             const res = await fetch('https://www.youtube.com/youtubei/v1/player', {
                 method: 'POST',
@@ -394,7 +393,7 @@ async function fetchVideoInfoFallback(videoId) {
         'Accept': 'application/json'
     };
 
-    // Tier 1: Healthy Active Piped API Instances
+    // Tier 1: Parallel Active Piped API Instances
     if (!result) {
         const pipedInstances = [
             `https://pipedapi.kavin.rocks/streams/${videoId}`,
@@ -406,15 +405,13 @@ async function fetchVideoInfoFallback(videoId) {
             `https://pipedapi.mha.fi/streams/${videoId}`
         ];
 
-        for (const endpoint of pipedInstances) {
+        const pipedRequests = pipedInstances.map(async (endpoint) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
             try {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 4000);
-
                 const res = await fetch(endpoint, { headers, signal: controller.signal });
                 clearTimeout(timeout);
-
-                if (!res.ok) continue;
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 if (data && data.title) {
@@ -425,9 +422,7 @@ async function fetchVideoInfoFallback(videoId) {
                     if (data.videoStreams && Array.isArray(data.videoStreams)) {
                         data.videoStreams.forEach(stream => {
                             if (stream.height) {
-                                if (!formats.includes(stream.height)) {
-                                    formats.push(stream.height);
-                                }
+                                if (!formats.includes(stream.height)) formats.push(stream.height);
                                 if (stream.contentLength && (!filesizeMap[stream.height] || stream.contentLength > filesizeMap[stream.height])) {
                                     filesizeMap[stream.height] = stream.contentLength;
                                 }
@@ -439,22 +434,29 @@ async function fetchVideoInfoFallback(videoId) {
                     formats = [...new Set(formats)];
                     if (formats.length === 0) formats = [1080, 720, 480, 360];
 
-                    result = {
+                    return {
                         title: data.title,
                         thumbnail: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
                         duration: data.duration || 0,
                         formats: formats.map(h => ({ height: h, filesize: filesizeMap[h] || null })),
                         rawStreams: data
                     };
-                    break;
                 }
+                throw new Error('Invalid Piped data');
             } catch (e) {
-                logger.warn(`Piped API failed (${endpoint}): ${e.message}`);
+                clearTimeout(timeout);
+                throw e;
             }
+        });
+
+        try {
+            result = await Promise.any(pipedRequests);
+        } catch (e) {
+            // Piped failed
         }
     }
 
-    // Tier 2: Healthy Active Invidious API Instances
+    // Tier 2: Parallel Active Invidious API Instances
     if (!result) {
         const invidiousInstances = [
             `https://yewtu.be/api/v1/videos/${videoId}`,
@@ -464,15 +466,13 @@ async function fetchVideoInfoFallback(videoId) {
             `https://iv.melmac.space/api/v1/videos/${videoId}`
         ];
 
-        for (const endpoint of invidiousInstances) {
+        const invidiousRequests = invidiousInstances.map(async (endpoint) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
             try {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 4000);
-
                 const res = await fetch(endpoint, { headers, signal: controller.signal });
                 clearTimeout(timeout);
-
-                if (!res.ok) continue;
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 if (data && data.title) {
@@ -503,18 +503,25 @@ async function fetchVideoInfoFallback(videoId) {
                     formats = [...new Set(formats)].sort((a, b) => b - a);
                     if (formats.length === 0) formats = [1080, 720, 480, 360];
 
-                    result = {
+                    return {
                         title: data.title,
                         thumbnail: (data.videoThumbnails && data.videoThumbnails[0]) ? data.videoThumbnails[0].url : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
                         duration: data.lengthSeconds || 0,
                         formats: formats.map(h => ({ height: h, filesize: null })),
                         rawStreams: { videoStreams, audioStreams }
                     };
-                    break;
                 }
+                throw new Error('Invalid Invidious data');
             } catch (e) {
-                logger.warn(`Invidious API failed (${endpoint}): ${e.message}`);
+                clearTimeout(timeout);
+                throw e;
             }
+        });
+
+        try {
+            result = await Promise.any(invidiousRequests);
+        } catch (e) {
+            // Invidious failed
         }
     }
 
