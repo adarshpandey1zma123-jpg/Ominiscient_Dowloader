@@ -245,7 +245,7 @@ async function fetchFromCobaltApi(url, quality, format) {
 
     const requests = cobaltEndpoints.map(async (baseUrl) => {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3500);
+        const timeout = setTimeout(() => controller.abort(), 5500);
 
         try {
             const res = await fetch(baseUrl, {
@@ -290,7 +290,7 @@ async function fetchFromCobaltApi(url, quality, format) {
     }
 }
 
-// Direct YouTube Innertube Client (Fast 3s timeout per client)
+// Direct YouTube Innertube Client (6s timeout per client for cloud stability)
 async function fetchFromYouTubeInnertube(videoId) {
     const clients = [
         { clientName: 'ANDROID_TESTSUITE', clientVersion: '1.9', userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' },
@@ -300,7 +300,7 @@ async function fetchFromYouTubeInnertube(videoId) {
     for (const c of clients) {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3000);
+            const timeout = setTimeout(() => controller.abort(), 6000);
 
             const res = await fetch('https://www.youtube.com/youtubei/v1/player', {
                 method: 'POST',
@@ -407,7 +407,7 @@ async function fetchVideoInfoFallback(videoId) {
 
         const pipedRequests = pipedInstances.map(async (endpoint) => {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3000);
+            const timeout = setTimeout(() => controller.abort(), 5000);
             try {
                 const res = await fetch(endpoint, { headers, signal: controller.signal });
                 clearTimeout(timeout);
@@ -468,7 +468,7 @@ async function fetchVideoInfoFallback(videoId) {
 
         const invidiousRequests = invidiousInstances.map(async (endpoint) => {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3000);
+            const timeout = setTimeout(() => controller.abort(), 5000);
             try {
                 const res = await fetch(endpoint, { headers, signal: controller.signal });
                 clearTimeout(timeout);
