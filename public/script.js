@@ -221,14 +221,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressInfo.textContent = 'Please wait, almost done!';
             } else if (data.type === 'ready') {
                 eventSource.close();
+                progressFill.style.width = '100%';
+                progressPercent.textContent = '100%';
+                progressText.textContent = 'Download Complete!';
+
                 if (data.directUrl) {
                     triggerDirectBrowserDownload(data.directUrl, data.filename);
                 } else if (data.tempId) {
-                    window.location.href = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
+                    const serveUrl = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
+                    
+                    // Trigger mobile-safe anchor download
+                    const link = document.createElement('a');
+                    link.href = serveUrl;
+                    link.download = data.filename || 'video.mp4';
+                    link.target = '_self';
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+
+                    // Render fallback manual download button for mobile browsers (iOS Safari / Android Chrome)
+                    progressInfo.innerHTML = `<a href="${serveUrl}" download="${data.filename || 'video.mp4'}" style="display:inline-block; margin-top:8px; padding:8px 16px; background:#10b981; color:#fff; text-decoration:none; border-radius:20px; font-weight:600; font-size:0.85rem;"><i class="fa-solid fa-download"></i> Tap to Save File to Phone</a>`;
+
                     setTimeout(() => {
-                        progressContainer.classList.add('hidden');
                         downloadBtn.disabled = false;
-                    }, 4000);
+                    }, 5000);
                 }
             } else if (data.type === 'error') {
                 eventSource.close();

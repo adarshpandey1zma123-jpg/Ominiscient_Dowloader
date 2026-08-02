@@ -495,7 +495,12 @@ app.get('/api/serve', async (req, res) => {
         return res.status(404).json({ error: 'File expired or not found.' });
     }
 
-    const displayName = filename || jobMeta.filename || 'download';
+    const displayName = filename || jobMeta.filename || 'download.mp4';
+    const stat = fs.statSync(jobMeta.localPath);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', stat.size);
+
     res.download(jobMeta.localPath, displayName, (err) => {
         if (err && err.code !== 'ECONNRESET' && err.message !== 'Request aborted' && !res.headersSent) {
             logger.error(`Error serving file ${tempId}: ${err.message}`);
@@ -505,7 +510,7 @@ app.get('/api/serve', async (req, res) => {
                 if (fs.existsSync(jobMeta.localPath)) fs.unlinkSync(jobMeta.localPath);
                 activeJobs.delete(tempId);
             } catch (e) {}
-        }, 15000);
+        }, 30000);
     });
 });
 
