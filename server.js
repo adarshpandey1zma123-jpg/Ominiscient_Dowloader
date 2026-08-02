@@ -233,11 +233,11 @@ async function fetchFromCobaltApi(url, quality, format, clientIp) {
     const fullUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
 
     const cobaltEndpoints = [
-        'https://api.cobalt.tools',
-        'https://cobalt-api.kavin.rocks/api/json',
-        'https://co.wuk.sh/api/json',
-        'https://cobalt.api.timelessnesses.me',
-        'https://cobalt.q137.net/api/json'
+        'https://api.cobalt.tools/',
+        'https://cobalt-api.hyper.lol/',
+        'https://cobalt.q137.net/api/json',
+        'https://cobalt.api.sc7.io/',
+        'https://cobalt.imput.net/'
     ];
 
     const qualityMap = { '360': '360', '480': '480', '720': '720', '1080': '1080', '1440': '1440', '2160': '2160', '4320': '4320' };
