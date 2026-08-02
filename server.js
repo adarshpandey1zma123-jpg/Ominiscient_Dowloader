@@ -272,11 +272,8 @@ app.get('/api/info', async (req, res) => {
             const baseOptions = {
                 dumpSingleJson: true,
                 noWarnings: true,
-                noCallHome: true,
                 noCheckCertificates: true,
                 preferFreeFormats: true,
-                youtubeSkipDashManifest: true,
-                skipDownload: true,
                 geoBypass: true,
                 extractorArgs: 'youtube:player_client=mweb,android_vr',
                 addHeader: [
@@ -390,56 +387,67 @@ app.get('/api/download', async (req, res) => {
         if (youtubedl) {
             sendProgress(jobId, { type: 'progress', percent: 20, totalSize: 'Extracting video via engine...', speed: 'Direct', eta: null });
             
-            const commonArgs = [
-                '--no-check-certificates', '--no-warnings', '--geo-bypass',
-                '--concurrent-fragments', '16', '--buffer-size', '2M', '--http-chunk-size', '10M',
-                '--retries', '10', '--fragment-retries', '10', '--newline',
-                '--extractor-args', 'youtube:player_client=mweb,android_vr',
-                '--add-header', 'referer:https://www.youtube.com/',
-                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            ];
-
-            // Use Cloudflare WARP SOCKS5 Proxy if available on port 4001
-            commonArgs.push('--proxy', 'socks5://127.0.0.1:4001');
-
             let outputPathTemplate;
-            let args = [url];
+            const flags = {
+                noCheckCertificates: true,
+                noWarnings: true,
+                geoBypass: true,
+                concurrentFragments: 16,
+                bufferSize: '2M',
+                httpChunkSize: '10M',
+                retries: 10,
+                fragmentRetries: 10,
+                newline: true,
+                extractorArgs: 'youtube:player_client=mweb,android_vr',
+                addHeader: [
+                    'referer:https://www.youtube.com/',
+                    'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                ],
+                proxy: 'socks5://127.0.0.1:4001'
+            };
 
             if (format === 'mp3') {
                 outputPathTemplate = path.join(downloadsDir, `${tempId}---%(title)s.%(ext)s`);
-                args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0', '-o', outputPathTemplate, ...commonArgs);
+                flags.extractAudio = true;
+                flags.audioFormat = 'mp3';
+                flags.audioQuality = 0;
+                flags.output = outputPathTemplate;
             } else {
                 outputPathTemplate = path.join(downloadsDir, `${tempId}---%(title)s_(${quality}p).%(ext)s`);
                 let formatOption = 'bestvideo+bestaudio/best';
                 if (quality) {
                     formatOption = `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`;
                 }
-                args.push('-f', formatOption, '--merge-output-format', 'mp4', '-o', outputPathTemplate, ...commonArgs);
+                flags.format = formatOption;
+                flags.mergeOutputFormat = 'mp4';
+                flags.output = outputPathTemplate;
             }
 
-            const ytdlpProcess = youtubedl.exec(url, args);
+            const ytdlpProcess = youtubedl.exec(url, flags);
 
-            ytdlpProcess.stdout.on('data', (data) => {
-                const text = data.toString();
-                const match = text.match(/\[download\]\s+(\d+\.\d+)%/);
-                if (match) {
-                    const percent = parseFloat(match[1]);
-                    const sizeMatch = text.match(/of\s+(~?\s*[\d\.]+\s*\w+)/);
-                    const speedMatch = text.match(/at\s+([\d\.]+\s*\w+\/s)/);
-                    const etaMatch = text.match(/ETA\s+([\d:]+)/);
+            if (ytdlpProcess.stdout) {
+                ytdlpProcess.stdout.on('data', (data) => {
+                    const text = data.toString();
+                    const match = text.match(/\[download\]\s+(\d+\.\d+)%/);
+                    if (match) {
+                        const percent = parseFloat(match[1]);
+                        const sizeMatch = text.match(/of\s+(~?\s*[\d\.]+\s*\w+)/);
+                        const speedMatch = text.match(/at\s+([\d\.]+\s*\w+\/s)/);
+                        const etaMatch = text.match(/ETA\s+([\d:]+)/);
 
-                    sendProgress(jobId, {
-                        type: 'progress',
-                        percent: percent,
-                        totalSize: sizeMatch ? sizeMatch[1] : 'Calculating...',
-                        speed: speedMatch ? speedMatch[1] : 'Fast',
-                        eta: etaMatch ? etaMatch[1] : null
-                    });
-                }
-                if (text.includes('[Merger]') || text.includes('[ExtractAudio]')) {
-                    sendProgress(jobId, { type: 'merging' });
-                }
-            });
+                        sendProgress(jobId, {
+                            type: 'progress',
+                            percent: percent,
+                            totalSize: sizeMatch ? sizeMatch[1] : 'Calculating...',
+                            speed: speedMatch ? speedMatch[1] : 'Fast',
+                            eta: etaMatch ? etaMatch[1] : null
+                        });
+                    }
+                    if (text.includes('[Merger]') || text.includes('[ExtractAudio]')) {
+                        sendProgress(jobId, { type: 'merging' });
+                    }
+                });
+            }
 
             await ytdlpProcess;
 
