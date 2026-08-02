@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Omniscient All-in-One Video & Audio Downloader</title>
+    <title>Omniscient 8K/4K YouTube Downloader</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=2">
     <!-- FontAwesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
@@ -23,33 +23,23 @@
         <header class="header">
             <h1 class="logo">
                 <i class="fa-solid fa-cloud-arrow-down gradient-text"></i>
-                <span class="gradient-text">Omniscient</span> All-in-One
+                <span class="gradient-text">Omniscient</span> Downloader
             </h1>
-            <p class="subtitle">Download videos, reels, shorts & audio from <b>YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit</b> & 1000+ sites.<br>Ultra-fast, high quality, 100% free.</p>
+            <p class="subtitle">Download YouTube videos in magnificent 8K and 4K resolution.<br>Completely free, beautifully fast.</p>
         </header>
 
         <section class="search-section">
             <form id="fetchForm" class="search-box">
-                <i class="fa-solid fa-link search-icon"></i>
-                <input type="url" id="urlInput" placeholder="Paste link from YouTube, Instagram, TikTok, Twitter/X, Facebook..." required autocomplete="off">
+                <i class="fa-brands fa-youtube search-icon"></i>
+                <input type="url" id="urlInput" placeholder="Paste YouTube link here..." required autocomplete="off">
                 <button type="submit" id="fetchBtn">
                     <span class="btn-text">Search</span>
                     <i class="fa-solid fa-arrow-right"></i>
                 </button>
             </form>
-
-            <div class="platform-badges">
-                <span class="badge"><i class="fa-brands fa-youtube color-yt"></i> YouTube</span>
-                <span class="badge"><i class="fa-brands fa-instagram color-ig"></i> Instagram</span>
-                <span class="badge"><i class="fa-brands fa-tiktok color-tt"></i> TikTok</span>
-                <span class="badge"><i class="fa-brands fa-x-twitter color-tw"></i> X / Twitter</span>
-                <span class="badge"><i class="fa-brands fa-facebook color-fb"></i> Facebook</span>
-                <span class="badge"><i class="fa-brands fa-reddit color-rd"></i> Reddit</span>
-            </div>
-
             <div id="loading" class="loading hidden">
                 <div class="spinner"></div>
-                <p>Analyzing media link...</p>
+                <p>Analyzing video...</p>
             </div>
             <div id="errorMessage" class="error-message hidden"></div>
         </section>

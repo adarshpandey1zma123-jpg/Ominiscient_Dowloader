@@ -556,45 +556,6 @@ footer {
     }
 }
 
-/* Platform Badges */
-.platform-badges {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-    margin-top: 0.5rem;
-}
-
-.badge {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 0.4rem 0.8rem;
-    border-radius: 50px;
-    font-size: 0.82rem;
-    font-weight: 500;
-    color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    backdrop-filter: blur(10px);
-    transition: all 0.25s ease;
-}
-
-.badge:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-    transform: translateY(-2px);
-    border-color: rgba(255, 255, 255, 0.2);
-}
-
-.color-yt { color: #ff0000; }
-.color-ig { color: #e1306c; }
-.color-tt { color: #00f2fe; }
-.color-tw { color: #1da1f2; }
-.color-fb { color: #1877f2; }
-.color-rd { color: #ff4500; }
-
 /* Very small phones (< 400px) */
 @media (max-width: 400px) {
     .logo {

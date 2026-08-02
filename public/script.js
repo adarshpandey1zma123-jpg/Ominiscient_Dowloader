@@ -109,28 +109,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 videoDuration.querySelector('span').textContent = formatTime(Number(dur));
             }
 
-            qualitySelect.innerHTML = '';
-            const isYouTube = currentUrl.includes('youtube.com') || currentUrl.includes('youtu.be');
-
-            let resList = isYouTube ? [
-                { height: 1080, label: '1080p — Full HD (Default)' },
-                { height: 720, label: '720p — HD' },
-                { height: 480, label: '480p — SD' },
-                { height: 360, label: '360p — Low' },
-                { height: 1440, label: '1440p — 2K Quad HD' },
-                { height: 2160, label: '2160p — 4K Ultra HD' },
-                { height: 4320, label: '4320p — 8K Ultra HD' }
-            ] : [
-                { height: 1080, label: 'Best Quality HD (Recommended)' },
-                { height: 720, label: 'Standard HD (720p)' },
-                { height: 480, label: 'Mobile Quality (480p)' }
+            qualitySelect.innerHTML = '<option value="" disabled selected>Select Quality</option>';
+            const standardResolutions = [
+                { height: 4320, label: '8K Ultra HD' },
+                { height: 2160, label: '4K Ultra HD' },
+                { height: 1440, label: '2K Quad HD' },
+                { height: 1080, label: 'Full HD' },
+                { height: 720, label: 'HD' },
+                { height: 480, label: 'SD (480p)' },
+                { height: 360, label: 'Low (360p)' }
             ];
 
-            resList.forEach((res, idx) => {
+            const availableFormats = data.formats || [];
+            const maxAvailableHeight = availableFormats.length > 0 ? Math.max(...availableFormats.map(f => f.height)) : 720;
+
+            standardResolutions.forEach(res => {
+                const matchedFormat = availableFormats.find(f => f.height === res.height);
+                const size = matchedFormat && matchedFormat.filesize ? formatBytes(matchedFormat.filesize) : null;
+                
                 const opt = document.createElement('option');
                 opt.value = res.height;
-                opt.textContent = res.label;
-                if (idx === 0) opt.selected = true;
+                
+                let optionText = `${res.height}p — ${res.label}`;
+                if (size) {
+                    optionText += ` (~${size})`;
+                } else if (res.height > maxAvailableHeight) {
+                    optionText += ` (Best Available / Fallback)`;
+                }
+                
+                opt.textContent = optionText;
                 qualitySelect.appendChild(opt);
             });
 
@@ -147,7 +154,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     downloadBtn.addEventListener('click', () => {
         const format = formatSelect.value;
-        const quality = qualitySelect.value || '1080';
+        const quality = qualitySelect.value;
+        
+        if (format === 'mp4' && !quality) {
+            alert('Please select a video quality first.');
+            return;
+        }
 
         const jobId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
 
