@@ -21,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentUrl = '';
 
-    // Handle format selection change
     formatSelect.addEventListener('change', () => {
         if (formatSelect.value === 'mp3') {
             qualityWrapper.classList.add('hidden');
@@ -70,25 +69,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    // Client-Side Cobalt API Engine (Uses Client's Residential IP to Bypass Cloud IP Blocks!)
+    // 1. Client-Side Cobalt API Engine (v10 Protocol)
     async function fetchCobaltClientSide(url, quality, format) {
+        const videoId = extractVideoId(url);
+        const canonicalUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
+
         const cobaltEndpoints = [
             'https://api.cobalt.tools',
-            'https://cobalt-api.kavin.rocks/api/json',
-            'https://co.wuk.sh/api/json',
-            'https://cobalt.api.timelessnesses.me'
+            'https://cobalt.api.sc7.io',
+            'https://cobalt.imput.net'
         ];
 
-        const vQuality = quality || '720';
-        const payload = {
-            url: url,
-            videoQuality: String(vQuality),
-            downloadMode: format === 'mp3' ? 'audio' : 'auto'
-        };
+        const payload = { url: canonicalUrl };
+        if (format === 'mp3') {
+            payload.downloadMode = 'audio';
+            payload.audioFormat = 'mp3';
+        } else {
+            payload.videoQuality = String(quality || '720');
+        }
 
         const requests = cobaltEndpoints.map(async (endpoint) => {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
+            const timeout = setTimeout(() => controller.abort(), 6000);
             try {
                 const res = await fetch(endpoint, {
                     method: 'POST',
@@ -109,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.picker && data.picker.length > 0) {
                     return { url: data.picker[0].url, filename: data.filename || `video.${format}` };
                 }
-                throw new Error('No URL in response');
+                throw new Error('No URL in Cobalt response');
             } catch (err) {
                 clearTimeout(timeout);
                 throw err;
@@ -119,39 +121,102 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             return await Promise.any(requests);
         } catch (e) {
-            console.warn('[Client Cobalt] All endpoints failed, falling back to server pipeline:', e);
+            console.warn('[Client Cobalt] Failed:', e);
             return null;
         }
     }
 
-    // Client-Side Quick Info Fetcher
-    async function fetchInfoClientSide(url) {
-        const videoId = extractVideoId(url);
-        if (!videoId) return null;
+    // 2. Client-Side Piped Stream Engine (Uses User Residential IP!)
+    async function fetchPipedClientSide(videoId, quality, format) {
+        const pipedEndpoints = [
+            `https://pipedapi.kavin.rocks/streams/${videoId}`,
+            `https://pipedapi.tokhmi.xyz/streams/${videoId}`,
+            `https://pipedapi.adminforge.de/streams/${videoId}`
+        ];
+
+        const targetHeight = Number(quality) || 720;
+
+        const requests = pipedEndpoints.map(async (ep) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const res = await fetch(ep, { signal: controller.signal });
+                clearTimeout(timeout);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+
+                if (format === 'mp3' && data.audioStreams && data.audioStreams.length > 0) {
+                    const bestAudio = data.audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+                    if (bestAudio && bestAudio.url) {
+                        return { url: bestAudio.url, filename: `${data.title || 'audio'}.mp3` };
+                    }
+                }
+
+                if (data.videoStreams && data.videoStreams.length > 0) {
+                    const validVideos = data.videoStreams.filter(v => v.url && v.height);
+                    let bestVid = validVideos.find(v => v.height === targetHeight)
+                        || validVideos.find(v => v.height <= targetHeight && v.height >= 360)
+                        || validVideos[0];
+                    if (bestVid && bestVid.url) {
+                        return { url: bestVid.url, filename: `${data.title || 'video'}_${bestVid.height}p.mp4` };
+                    }
+                }
+                throw new Error('No Piped stream found');
+            } catch (e) {
+                clearTimeout(timeout);
+                throw e;
+            }
+        });
 
         try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3000);
-            const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, {
-                signal: controller.signal
-            });
-            clearTimeout(timeout);
+            return await Promise.any(requests);
+        } catch (e) {
+            console.warn('[Client Piped] Failed:', e);
+            return null;
+        }
+    }
 
-            if (oembedRes.ok) {
-                const data = await oembedRes.json();
-                if (data && data.title) {
-                    return {
-                        title: data.title,
-                        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                        duration: 0,
-                        formats: [
-                            { height: 1080 }, { height: 720 }, { height: 480 }, { height: 360 }
-                        ]
-                    };
+    // 3. Client-Side Invidious Stream Engine (Uses User Residential IP!)
+    async function fetchInvidiousClientSide(videoId, quality, format) {
+        const invidiousEndpoints = [
+            `https://yewtu.be/api/v1/videos/${videoId}`,
+            `https://iv.melmac.space/api/v1/videos/${videoId}`
+        ];
+
+        const targetHeight = Number(quality) || 720;
+
+        const requests = invidiousEndpoints.map(async (ep) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const res = await fetch(ep, { signal: controller.signal });
+                clearTimeout(timeout);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+
+                if (format === 'mp3' && data.adaptiveFormats) {
+                    const audio = data.adaptiveFormats.find(a => a.type && a.type.includes('audio') && a.url);
+                    if (audio) return { url: audio.url, filename: `${data.title || 'audio'}.mp3` };
                 }
+
+                if (data.formatStreams && data.formatStreams.length > 0) {
+                    const valid = data.formatStreams.filter(f => f.url);
+                    let best = valid.find(f => parseInt(f.qualityLabel || f.height, 10) === targetHeight) || valid[0];
+                    if (best && best.url) return { url: best.url, filename: `${data.title || 'video'}.mp4` };
+                }
+                throw new Error('No Invidious format stream');
+            } catch (e) {
+                clearTimeout(timeout);
+                throw e;
             }
-        } catch (e) {}
-        return null;
+        });
+
+        try {
+            return await Promise.any(requests);
+        } catch (e) {
+            console.warn('[Client Invidious] Failed:', e);
+            return null;
+        }
     }
 
     function triggerDirectBrowserDownload(directUrl, filename) {
@@ -187,15 +252,25 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchBtn.disabled = true;
 
         try {
-            // First try server API for detailed info + duration
             const res = await fetch(`/api/info?url=${encodeURIComponent(url)}`);
             let data = null;
 
             if (res.ok) {
                 data = await res.json();
             } else {
-                // Fallback to client-side oEmbed info if server fails
-                data = await fetchInfoClientSide(url);
+                const videoId = extractVideoId(url);
+                if (videoId) {
+                    const oRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+                    if (oRes.ok) {
+                        const oData = await oRes.json();
+                        data = {
+                            title: oData.title,
+                            thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                            duration: 0,
+                            formats: [{ height: 1080 }, { height: 720 }, { height: 480 }, { height: 360 }]
+                        };
+                    }
+                }
             }
 
             if (!data) throw new Error('Failed to fetch video details.');
@@ -265,25 +340,46 @@ document.addEventListener('DOMContentLoaded', () => {
         progressContainer.classList.remove('hidden');
         downloadBtn.disabled = true;
 
-        progressFill.style.width = '20%';
-        progressPercent.textContent = '20%';
-        progressText.textContent = 'Connecting to download engine...';
-        progressInfo.textContent = 'Checking direct download link...';
+        progressFill.style.width = '30%';
+        progressPercent.textContent = '30%';
+        progressText.textContent = 'Resolving direct download link...';
+        progressInfo.textContent = 'Using Client Residential IP Engine...';
 
-        // TIER 0 (CLIENT-SIDE): Fetch direct download link from client's browser (Using Client's Residential IP!)
+        const videoId = extractVideoId(currentUrl);
+
+        // TIER 0A: Client Cobalt v10
         try {
-            console.log('[Frontend] Attempting Client-Side Cobalt fetch with user IP...');
-            const clientCobalt = await fetchCobaltClientSide(currentUrl, quality, format);
-            if (clientCobalt && clientCobalt.url) {
-                console.log('[Frontend] Client-Side Cobalt SUCCESS:', clientCobalt.url);
-                triggerDirectBrowserDownload(clientCobalt.url, clientCobalt.filename);
+            const cobaltRes = await fetchCobaltClientSide(currentUrl, quality, format);
+            if (cobaltRes && cobaltRes.url) {
+                console.log('[Client Direct] Cobalt Success');
+                triggerDirectBrowserDownload(cobaltRes.url, cobaltRes.filename);
                 return;
             }
-        } catch (clientErr) {
-            console.warn('[Frontend] Client-side fetch failed, falling back to server SSE:', clientErr);
+        } catch (e) {}
+
+        // TIER 0B: Client Piped Engine
+        if (videoId) {
+            try {
+                const pipedRes = await fetchPipedClientSide(videoId, quality, format);
+                if (pipedRes && pipedRes.url) {
+                    console.log('[Client Direct] Piped Success');
+                    triggerDirectBrowserDownload(pipedRes.url, pipedRes.filename);
+                    return;
+                }
+            } catch (e) {}
+
+            // TIER 0C: Client Invidious Engine
+            try {
+                const invRes = await fetchInvidiousClientSide(videoId, quality, format);
+                if (invRes && invRes.url) {
+                    console.log('[Client Direct] Invidious Success');
+                    triggerDirectBrowserDownload(invRes.url, invRes.filename);
+                    return;
+                }
+            } catch (e) {}
         }
 
-        // TIER 1 (SERVER-SIDE): Fallback to SSE Server Pipeline if client-side fetch is blocked or fails
+        // TIER 1 (SERVER BACKUP): Fallback to Server SSE Pipeline if client engines fail
         progressText.textContent = 'Connecting to server pipeline...';
         const jobId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
         const eventSource = new EventSource(`/api/progress?id=${jobId}`);

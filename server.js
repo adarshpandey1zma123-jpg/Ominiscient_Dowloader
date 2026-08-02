@@ -243,11 +243,13 @@ async function fetchFromCobaltApi(url, quality, format, clientIp) {
     const qualityMap = { '360': '360', '480': '480', '720': '720', '1080': '1080', '1440': '1440', '2160': '2160', '4320': '4320' };
     const vQuality = qualityMap[String(quality)] || '720';
 
-    const payload = {
-        url: fullUrl,
-        videoQuality: vQuality,
-        downloadMode: format === 'mp3' ? 'audio' : 'auto'
-    };
+    const payload = { url: fullUrl };
+    if (format === 'mp3') {
+        payload.downloadMode = 'audio';
+        payload.audioFormat = 'mp3';
+    } else {
+        payload.videoQuality = String(vQuality);
+    }
 
     const headers = {
         'Accept': 'application/json',
