@@ -58,6 +58,123 @@ document.addEventListener('DOMContentLoaded', () => {
         errorMessage.classList.add('hidden');
     }
 
+    function extractVideoId(url) {
+        try {
+            const parsed = new URL(url);
+            if (parsed.hostname.includes('youtu.be')) return parsed.pathname.replace('/', '').split('?')[0];
+            if (parsed.hostname.includes('youtube.com')) {
+                if (parsed.pathname.startsWith('/shorts/')) return parsed.pathname.replace('/shorts/', '').split('?')[0];
+                return parsed.searchParams.get('v');
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // Client-Side Cobalt API Engine (Uses Client's Residential IP to Bypass Cloud IP Blocks!)
+    async function fetchCobaltClientSide(url, quality, format) {
+        const cobaltEndpoints = [
+            'https://api.cobalt.tools',
+            'https://cobalt-api.kavin.rocks/api/json',
+            'https://co.wuk.sh/api/json',
+            'https://cobalt.api.timelessnesses.me'
+        ];
+
+        const vQuality = quality || '720';
+        const payload = {
+            url: url,
+            videoQuality: String(vQuality),
+            downloadMode: format === 'mp3' ? 'audio' : 'auto'
+        };
+
+        const requests = cobaltEndpoints.map(async (endpoint) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+
+                if (data.url) {
+                    return { url: data.url, filename: data.filename || `video.${format}` };
+                }
+                if (data.picker && data.picker.length > 0) {
+                    return { url: data.picker[0].url, filename: data.filename || `video.${format}` };
+                }
+                throw new Error('No URL in response');
+            } catch (err) {
+                clearTimeout(timeout);
+                throw err;
+            }
+        });
+
+        try {
+            return await Promise.any(requests);
+        } catch (e) {
+            console.warn('[Client Cobalt] All endpoints failed, falling back to server pipeline:', e);
+            return null;
+        }
+    }
+
+    // Client-Side Quick Info Fetcher
+    async function fetchInfoClientSide(url) {
+        const videoId = extractVideoId(url);
+        if (!videoId) return null;
+
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
+            const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+
+            if (oembedRes.ok) {
+                const data = await oembedRes.json();
+                if (data && data.title) {
+                    return {
+                        title: data.title,
+                        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                        duration: 0,
+                        formats: [
+                            { height: 1080 }, { height: 720 }, { height: 480 }, { height: 360 }
+                        ]
+                    };
+                }
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    function triggerDirectBrowserDownload(directUrl, filename) {
+        progressFill.style.width = '100%';
+        progressPercent.textContent = '100%';
+        progressText.textContent = 'Download ready!';
+        progressInfo.textContent = filename || 'Starting browser download...';
+
+        const a = document.createElement('a');
+        a.href = directUrl;
+        a.download = filename || 'download';
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+
+        setTimeout(() => {
+            progressContainer.classList.add('hidden');
+            downloadBtn.disabled = false;
+        }, 3000);
+    }
+
     fetchForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const url = urlInput.value.trim();
@@ -70,10 +187,18 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchBtn.disabled = true;
 
         try {
+            // First try server API for detailed info + duration
             const res = await fetch(`/api/info?url=${encodeURIComponent(url)}`);
-            const data = await res.json();
+            let data = null;
 
-            if (!res.ok) throw new Error(data.error || 'Failed to fetch video details.');
+            if (res.ok) {
+                data = await res.json();
+            } else {
+                // Fallback to client-side oEmbed info if server fails
+                data = await fetchInfoClientSide(url);
+            }
+
+            if (!data) throw new Error('Failed to fetch video details.');
 
             videoThumb.src = data.thumbnail;
             videoTitle.textContent = data.title;
@@ -128,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    downloadBtn.addEventListener('click', () => {
+    downloadBtn.addEventListener('click', async () => {
         const format = formatSelect.value;
         const quality = qualitySelect.value;
         
@@ -137,16 +262,30 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const jobId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-
         progressContainer.classList.remove('hidden');
         downloadBtn.disabled = true;
 
-        progressFill.style.width = '0%';
-        progressPercent.textContent = '0%';
-        progressText.textContent = 'Connecting to server...';
-        progressInfo.textContent = '';
+        progressFill.style.width = '20%';
+        progressPercent.textContent = '20%';
+        progressText.textContent = 'Connecting to download engine...';
+        progressInfo.textContent = 'Checking direct download link...';
 
+        // TIER 0 (CLIENT-SIDE): Fetch direct download link from client's browser (Using Client's Residential IP!)
+        try {
+            console.log('[Frontend] Attempting Client-Side Cobalt fetch with user IP...');
+            const clientCobalt = await fetchCobaltClientSide(currentUrl, quality, format);
+            if (clientCobalt && clientCobalt.url) {
+                console.log('[Frontend] Client-Side Cobalt SUCCESS:', clientCobalt.url);
+                triggerDirectBrowserDownload(clientCobalt.url, clientCobalt.filename);
+                return;
+            }
+        } catch (clientErr) {
+            console.warn('[Frontend] Client-side fetch failed, falling back to server SSE:', clientErr);
+        }
+
+        // TIER 1 (SERVER-SIDE): Fallback to SSE Server Pipeline if client-side fetch is blocked or fails
+        progressText.textContent = 'Connecting to server pipeline...';
+        const jobId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
         const eventSource = new EventSource(`/api/progress?id=${jobId}`);
 
         eventSource.onmessage = (event) => {
@@ -183,32 +322,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressText.textContent = 'Merging video + audio...';
                 progressInfo.textContent = 'Please wait, almost done!';
             } else if (data.type === 'ready') {
-                progressFill.style.width = '100%';
-                progressPercent.textContent = '100%';
-                progressText.textContent = 'Download starting...';
-                progressInfo.textContent = data.filename || '';
                 eventSource.close();
-                
                 if (data.directUrl) {
-                    // Cobalt redirect: direct CDN link
-                    const a = document.createElement('a');
-                    a.href = data.directUrl;
-                    a.download = data.filename || 'download';
-                    a.target = '_blank';
-                    a.rel = 'noopener noreferrer';
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
+                    triggerDirectBrowserDownload(data.directUrl, data.filename);
                 } else if (data.tempId) {
-                    // Local server file
                     window.location.href = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
+                    setTimeout(() => {
+                        progressContainer.classList.add('hidden');
+                        downloadBtn.disabled = false;
+                    }, 4000);
                 }
-                
-                setTimeout(() => {
-                    progressContainer.classList.add('hidden');
-                    downloadBtn.disabled = false;
-                }, 4000);
-                
             } else if (data.type === 'error') {
                 eventSource.close();
                 alert('Download failed: ' + data.message);
