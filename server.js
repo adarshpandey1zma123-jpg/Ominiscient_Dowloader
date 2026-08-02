@@ -165,24 +165,30 @@ function extractVideoId(url) {
     }
 }
 
-// Reliable stream downloader using Node.js built-in https module
-function downloadStreamToFile(url, destPath, maxRedirects = 5) {
+// Reliable stream downloader using Node.js built-in https module (Forwarding User Real Client IP!)
+function downloadStreamToFile(url, destPath, clientIp = null, maxRedirects = 5) {
     return new Promise((resolve, reject) => {
         if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
         const protocol = url.startsWith('https') ? require('https') : require('http');
         
         logger.info(`Downloading stream: ${url.substring(0, 100)}...`);
         
+        const reqHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Referer': 'https://www.youtube.com/'
+        };
+        if (clientIp) {
+            reqHeaders['X-Forwarded-For'] = clientIp;
+            reqHeaders['X-Real-IP'] = clientIp;
+        }
+
         const req = protocol.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Referer': 'https://www.youtube.com/'
-            },
+            headers: reqHeaders,
             timeout: 120000
         }, (response) => {
             if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
-                downloadStreamToFile(response.headers.location, destPath, maxRedirects - 1).then(resolve).catch(reject);
+                downloadStreamToFile(response.headers.location, destPath, clientIp, maxRedirects - 1).then(resolve).catch(reject);
                 return;
             }
             
@@ -221,8 +227,8 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
     });
 }
 
-// Ultra-Fast Parallel Cobalt API Engine
-async function fetchFromCobaltApi(url, quality, format) {
+// Ultra-Fast Parallel Cobalt API Engine (Forwarding User's Real Client IP!)
+async function fetchFromCobaltApi(url, quality, format, clientIp) {
     const videoId = extractVideoId(url);
     const fullUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
 
@@ -243,6 +249,17 @@ async function fetchFromCobaltApi(url, quality, format) {
         downloadMode: format === 'mp3' ? 'audio' : 'auto'
     };
 
+    const headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    };
+    if (clientIp) {
+        headers['X-Forwarded-For'] = clientIp;
+        headers['X-Real-IP'] = clientIp;
+        headers['CF-Connecting-IP'] = clientIp;
+    }
+
     const requests = cobaltEndpoints.map(async (baseUrl) => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5500);
@@ -250,11 +267,7 @@ async function fetchFromCobaltApi(url, quality, format) {
         try {
             const res = await fetch(baseUrl, {
                 method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                },
+                headers: headers,
                 body: JSON.stringify(payload),
                 signal: controller.signal
             });
@@ -290,8 +303,8 @@ async function fetchFromCobaltApi(url, quality, format) {
     }
 }
 
-// Direct YouTube Innertube Client (6s timeout per client for cloud stability)
-async function fetchFromYouTubeInnertube(videoId) {
+// Direct YouTube Innertube Client (Forwarding User Real Client IP!)
+async function fetchFromYouTubeInnertube(videoId, clientIp) {
     const clients = [
         { clientName: 'ANDROID_TESTSUITE', clientVersion: '1.9', userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' },
         { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', userAgent: 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/537.42 TV Safari/537.42' }
@@ -302,12 +315,18 @@ async function fetchFromYouTubeInnertube(videoId) {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 6000);
 
+            const headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': c.userAgent
+            };
+            if (clientIp) {
+                headers['X-Forwarded-For'] = clientIp;
+                headers['X-Real-IP'] = clientIp;
+            }
+
             const res = await fetch('https://www.youtube.com/youtubei/v1/player', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': c.userAgent
-                },
+                headers: headers,
                 body: JSON.stringify({
                     context: {
                         client: {
@@ -736,7 +755,7 @@ app.get('/api/download', async (req, res) => {
         // === TIER 0: Cobalt Direct Download (Instant High-Speed) ===
         sendProgress(jobId, { type: 'progress', percent: 5, totalSize: 'Connecting...', speed: 'High Speed Direct', eta: null });
         try {
-            const cobaltResult = await fetchFromCobaltApi(url, quality, format);
+            const cobaltResult = await fetchFromCobaltApi(url, quality, format, clientIp);
             if (cobaltResult && cobaltResult.url) {
                 logger.info(`[Job ${jobId}] Cobalt ${cobaltResult.type}: ${cobaltResult.url.substring(0, 80)}...`);
 
@@ -747,7 +766,7 @@ app.get('/api/download', async (req, res) => {
                     const finalFilename = `${tempId}---${sanitizedTitle}`;
                     const finalPath = path.join(downloadsDir, finalFilename);
 
-                    await downloadStreamToFile(cobaltResult.url, finalPath);
+                    await downloadStreamToFile(cobaltResult.url, finalPath, clientIp);
 
                     const downloadName = finalFilename.replace(`${tempId}---`, '');
                     activeJobs.set(tempId, { s3Key: null, filename: downloadName, localPath: finalPath });
@@ -775,7 +794,7 @@ app.get('/api/download', async (req, res) => {
             sendProgress(jobId, { type: 'progress', percent: 10, totalSize: 'Connecting to stream...', speed: 'Stream Engine', eta: null });
 
             try {
-                const fallbackData = await fetchVideoInfoFallback(videoId);
+                const fallbackData = await fetchVideoInfoFallback(videoId, clientIp);
                 
                 if (fallbackData && fallbackData.rawStreams) {
                     const rawStreams = fallbackData.rawStreams;
