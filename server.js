@@ -124,21 +124,6 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
         });
     });
 }
-                try { fs.unlinkSync(destPath); } catch (e) {}
-                reject(err);
-            });
-        });
-        
-        req.on('error', (err) => {
-            try { fs.unlinkSync(destPath); } catch (e) {}
-            reject(err);
-        });
-        req.on('timeout', () => {
-            req.destroy();
-            reject(new Error('Stream download timeout (120s)'));
-        });
-    });
-}
 
 // Fast Cobalt API Engine
 async function fetchFromCobaltApi(url, quality, format) {
