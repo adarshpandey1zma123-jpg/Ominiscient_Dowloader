@@ -33,6 +33,16 @@ try {
     console.warn('[Server] Note on binary chmod permissions:', chmodErr.message);
 }
 
+// Auto-generate cookies.txt if YOUTUBE_COOKIES env var is present
+try {
+    if (process.env.YOUTUBE_COOKIES) {
+        fs.writeFileSync(path.join(__dirname, 'cookies.txt'), process.env.YOUTUBE_COOKIES);
+        console.log('[Server] YOUTUBE_COOKIES loaded into cookies.txt');
+    }
+} catch (cookieErr) {
+    console.warn('[Server] Note on cookies initialization:', cookieErr.message);
+}
+
 let rateLimit = null;
 try {
     rateLimit = require('express-rate-limit');
@@ -303,6 +313,40 @@ async function fetchFromCobaltApi(url, quality, format, clientIp) {
         logger.warn(`All Cobalt parallel instances failed`);
         return null;
     }
+}
+
+// VKR Downloader API Engine (Ultra-Fast Backup)
+async function fetchFromVKRApi(url, quality, format, clientIp) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 6000);
+        const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+        if (clientIp) headers['X-Forwarded-For'] = clientIp;
+
+        const res = await fetch(`https://api.vkrdown.com/v1/yt?url=${encodeURIComponent(url)}`, {
+            headers,
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.data && data.data.downloads && Array.isArray(data.data.downloads)) {
+                const downloads = data.data.downloads;
+                if (format === 'mp3') {
+                    const audio = downloads.find(d => d.format === 'mp3' || (d.quality && d.quality.includes('audio'))) || downloads[0];
+                    if (audio && audio.url) return { type: 'redirect', url: audio.url, filename: `${data.data.title || 'audio'}.mp3` };
+                } else {
+                    const targetHeight = Number(quality) || 720;
+                    const video = downloads.find(d => d.quality && d.quality.includes(String(targetHeight))) || downloads[0];
+                    if (video && video.url) return { type: 'redirect', url: video.url, filename: `${data.data.title || 'video'}_${quality || 'HD'}p.mp4` };
+                }
+            }
+        }
+    } catch (e) {
+        logger.warn(`VKR API failed: ${e.message}`);
+    }
+    return null;
 }
 
 // Direct YouTube Innertube Client (Forwarding User Real Client IP!)
@@ -754,12 +798,17 @@ app.get('/api/download', async (req, res) => {
     res.json({ success: true, message: 'Download initiated successfully' });
 
     try {
-        // === TIER 0: Cobalt Direct Download (Instant High-Speed) ===
+        // === TIER 0: Cobalt & VKR Direct Download Engine (Instant High-Speed) ===
         sendProgress(jobId, { type: 'progress', percent: 5, totalSize: 'Connecting...', speed: 'High Speed Direct', eta: null });
         try {
-            const cobaltResult = await fetchFromCobaltApi(url, quality, format, clientIp);
+            let cobaltResult = await fetchFromCobaltApi(url, quality, format, clientIp);
+            if (!cobaltResult) {
+                logger.info(`[Job ${jobId}] Trying VKR API engine fallback...`);
+                cobaltResult = await fetchFromVKRApi(url, quality, format, clientIp);
+            }
+
             if (cobaltResult && cobaltResult.url) {
-                logger.info(`[Job ${jobId}] Cobalt ${cobaltResult.type}: ${cobaltResult.url.substring(0, 80)}...`);
+                logger.info(`[Job ${jobId}] Direct Engine ${cobaltResult.type}: ${cobaltResult.url.substring(0, 80)}...`);
 
                 if (cobaltResult.type === 'tunnel') {
                     // Tunnel: download through our server to client
@@ -811,7 +860,7 @@ app.get('/api/download', async (req, res) => {
                                 sendProgress(jobId, { type: 'progress', percent: 25, totalSize: 'Downloading audio...', speed: 'Stream Engine', eta: null });
                                 
                                 const tempAudioPath = path.join(downloadsDir, `${tempId}_audio_temp`);
-                                await downloadStreamToFile(bestAudio.url, tempAudioPath);
+                                await downloadStreamToFile(bestAudio.url, tempAudioPath, clientIp);
                                 
                                 sendProgress(jobId, { type: 'progress', percent: 80, totalSize: 'Converting to MP3...', speed: 'FFmpeg', eta: null });
                                 
@@ -847,7 +896,7 @@ app.get('/api/download', async (req, res) => {
                             sendProgress(jobId, { type: 'progress', percent: 15, totalSize: 'Downloading video...', speed: 'Stream Engine', eta: null });
                             
                             const tempVideoPath = path.join(downloadsDir, `${tempId}_video_temp`);
-                            await downloadStreamToFile(bestVideo.url, tempVideoPath);
+                            await downloadStreamToFile(bestVideo.url, tempVideoPath, clientIp);
                             
                             let finalFilename, finalPath;
                             const bestAudio = audioStreams.length > 0 ? audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0] : null;
@@ -856,7 +905,7 @@ app.get('/api/download', async (req, res) => {
                                 sendProgress(jobId, { type: 'progress', percent: 55, totalSize: 'Downloading audio...', speed: 'Stream Engine', eta: null });
                                 
                                 const tempAudioPath = path.join(downloadsDir, `${tempId}_audio_temp`);
-                                await downloadStreamToFile(bestAudio.url, tempAudioPath);
+                                await downloadStreamToFile(bestAudio.url, tempAudioPath, clientIp);
                                 
                                 sendProgress(jobId, { type: 'progress', percent: 85, totalSize: 'Merging video + audio...', speed: 'FFmpeg', eta: null });
                                 
@@ -907,9 +956,10 @@ app.get('/api/download', async (req, res) => {
                 '--no-check-certificates', '--no-warnings', '--geo-bypass',
                 '--concurrent-fragments', '16', '--buffer-size', '2M', '--http-chunk-size', '10M',
                 '--retries', '10', '--fragment-retries', '10', '--newline',
-                '--extractor-args', 'youtube:player_client=tvhtml5,android_testsuite,web_creator,mweb,ios',
+                '--extractor-args', 'youtube:player_client=mweb,android_vr',
                 '--add-header', 'referer:https://www.youtube.com/',
-                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                '--add-header', 'accept-language:en-US,en;q=0.9'
             ];
 
             if (fs.existsSync(cookiesPath)) commonArgs.push('--cookies', cookiesPath);
