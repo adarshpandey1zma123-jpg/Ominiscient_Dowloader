@@ -275,6 +275,7 @@ app.get('/api/info', async (req, res) => {
                 noCheckCertificates: true,
                 preferFreeFormats: true,
                 geoBypass: true,
+                proxy: 'socks5://127.0.0.1:4001',
                 extractorArgs: 'youtube:player_client=mweb,android_vr',
                 addHeader: [
                     'referer:https://www.youtube.com/',
@@ -351,7 +352,7 @@ app.get('/api/download', async (req, res) => {
 
     try {
         // TIER 0: Direct Download Engines (Cobalt & VKR API)
-        sendProgress(jobId, { type: 'progress', percent: 10, totalSize: 'Connecting to direct download engine...', speed: 'High Speed', eta: null });
+        sendProgress(jobId, { type: 'progress', percent: 10, totalSize: 'Initializing stream...', speed: 'Dedicated Proxy', eta: null });
         
         let directResult = await fetchFromCobaltApi(url, quality, format);
         if (!directResult) {
@@ -360,7 +361,7 @@ app.get('/api/download', async (req, res) => {
 
         if (directResult && directResult.url) {
             if (directResult.type === 'tunnel') {
-                sendProgress(jobId, { type: 'progress', percent: 20, totalSize: 'Downloading video stream...', speed: 'High Speed', eta: null });
+                sendProgress(jobId, { type: 'progress', percent: 20, totalSize: 'Streaming media...', speed: 'High Speed', eta: null });
                 const sanitizedTitle = (directResult.filename || `video_${quality}`).replace(/[/\\?%*:|"<>]/g, '_');
                 const finalFilename = `${tempId}---${sanitizedTitle}`;
                 const finalPath = path.join(downloadsDir, finalFilename);
@@ -385,7 +386,7 @@ app.get('/api/download', async (req, res) => {
 
         // TIER 1: yt-dlp Core Engine (Powered by Cloudflare WARP Proxy if active)
         if (youtubedl) {
-            sendProgress(jobId, { type: 'progress', percent: 20, totalSize: 'Extracting video via engine...', speed: 'Direct', eta: null });
+            sendProgress(jobId, { type: 'progress', percent: 20, totalSize: 'Connecting to Cloudflare proxy stream...', speed: 'Dedicated Proxy', eta: null });
             
             let outputPathTemplate;
             const flags = {
@@ -485,7 +486,7 @@ app.get('/api/serve', async (req, res) => {
 
     const displayName = filename || jobMeta.filename || 'download';
     res.download(jobMeta.localPath, displayName, (err) => {
-        if (err) {
+        if (err && err.code !== 'ECONNRESET' && err.message !== 'Request aborted' && !res.headersSent) {
             logger.error(`Error serving file ${tempId}: ${err.message}`);
         }
         setTimeout(() => {
@@ -493,7 +494,7 @@ app.get('/api/serve', async (req, res) => {
                 if (fs.existsSync(jobMeta.localPath)) fs.unlinkSync(jobMeta.localPath);
                 activeJobs.delete(tempId);
             } catch (e) {}
-        }, 10000);
+        }, 15000);
     });
 });
 

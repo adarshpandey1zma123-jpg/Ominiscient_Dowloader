@@ -19,6 +19,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressPercent = document.getElementById('progressPercent');
     const progressInfo = document.getElementById('progressInfo');
 
+    if (progressFill) {
+        progressFill.style.transition = 'width 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
+    }
+
     let currentUrl = '';
 
     formatSelect.addEventListener('change', () => {
@@ -164,8 +168,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         progressFill.style.width = '10%';
         progressPercent.textContent = '10%';
-        progressText.textContent = 'Connecting to download engine...';
-        progressInfo.textContent = 'Forwarding User Residential IP...';
+        progressText.textContent = 'Initializing secure stream...';
+        progressInfo.textContent = 'Connecting to high-speed engine...';
 
         const eventSource = new EventSource(`/api/progress?id=${jobId}`);
 
@@ -195,8 +199,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pct = Math.min(data.percent, 99).toFixed(1);
                 progressFill.style.width = `${pct}%`;
                 progressPercent.textContent = `${pct}%`;
-                progressText.textContent = `Downloading...`;
-                progressInfo.textContent = `${data.totalSize}  |  Speed: ${data.speed}${data.eta ? '  |  ETA: ' + data.eta : ''}`;
+                progressText.textContent = `Downloading media...`;
+                
+                let infoParts = [];
+                if (data.totalSize && !data.totalSize.includes('Connecting') && !data.totalSize.includes('Extracting')) {
+                    infoParts.push(data.totalSize);
+                }
+                if (data.speed && data.speed !== 'Direct' && data.speed !== 'Fast' && data.speed !== 'High Speed') {
+                    infoParts.push(`Speed: ${data.speed}`);
+                } else {
+                    infoParts.push('High-Speed Dedicated Tunnel');
+                }
+                if (data.eta) {
+                    infoParts.push(`ETA: ${data.eta}`);
+                }
+                progressInfo.textContent = infoParts.join(' • ');
             } else if (data.type === 'merging') {
                 progressFill.style.width = '99%';
                 progressPercent.textContent = '99%';
