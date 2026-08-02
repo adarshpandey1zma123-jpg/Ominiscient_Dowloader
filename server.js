@@ -42,21 +42,22 @@ const progressClients = new Map();
 // Active downloads map: tempId -> file metadata
 const activeJobs = new Map();
 
-// Helper to normalize YouTube URLs
-function normalizeYouTubeUrl(inputUrl) {
+// Helper to normalize video URLs across all supported platforms
+function normalizeUrl(inputUrl) {
     try {
         const parsed = new URL(inputUrl);
-        let videoId = null;
         if (parsed.hostname.includes('youtu.be')) {
-            videoId = parsed.pathname.replace('/', '').split('?')[0];
-        } else if (parsed.hostname.includes('youtube.com')) {
-            if (parsed.pathname.startsWith('/shorts/')) {
-                videoId = parsed.pathname.replace('/shorts/', '').split('?')[0];
-            } else {
-                videoId = parsed.searchParams.get('v');
-            }
+            const videoId = parsed.pathname.replace('/', '').split('?')[0];
+            return `https://www.youtube.com/watch?v=${videoId}`;
         }
-        if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+        if (parsed.hostname.includes('youtube.com')) {
+            if (parsed.pathname.startsWith('/shorts/')) {
+                const videoId = parsed.pathname.replace('/shorts/', '').split('?')[0];
+                return `https://www.youtube.com/watch?v=${videoId}`;
+            }
+            const videoId = parsed.searchParams.get('v');
+            if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+        }
     } catch (e) {}
     return inputUrl;
 }
@@ -83,7 +84,7 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': '*/*',
-                'Referer': 'https://www.youtube.com/'
+                'Referer': 'https://www.google.com/'
             },
             timeout: 120000
         }, (response) => {
@@ -108,6 +109,21 @@ function downloadStreamToFile(url, destPath, maxRedirects = 5) {
                 });
             });
             file.on('error', (err) => {
+                try { fs.unlinkSync(destPath); } catch (e) {}
+                reject(err);
+            });
+        });
+        
+        req.on('error', (err) => {
+            try { fs.unlinkSync(destPath); } catch (e) {}
+            reject(err);
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Stream download timeout (120s)'));
+        });
+    });
+}
                 try { fs.unlinkSync(destPath); } catch (e) {}
                 reject(err);
             });
@@ -265,7 +281,7 @@ app.get('/api/info', async (req, res) => {
     let { url } = req.query;
     if (!url) return res.status(400).json({ error: 'URL is required' });
     const videoId = extractVideoId(url);
-    url = normalizeYouTubeUrl(url);
+    url = normalizeUrl(url);
 
     if (youtubedl) {
         try {
@@ -276,12 +292,15 @@ app.get('/api/info', async (req, res) => {
                 preferFreeFormats: true,
                 geoBypass: true,
                 proxy: 'socks5://127.0.0.1:4001',
-                extractorArgs: 'youtube:player_client=mweb,android_vr',
                 addHeader: [
-                    'referer:https://www.youtube.com/',
+                    'referer:https://www.google.com/',
                     'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 ]
             };
+
+            if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                baseOptions.extractorArgs = 'youtube:player_client=mweb,android_vr';
+            }
 
             const info = await youtubedl(url, baseOptions);
             const specificResolutions = [4320, 2160, 1440, 1080, 720, 480, 360];
@@ -300,8 +319,8 @@ app.get('/api/info', async (req, res) => {
             if (formats.length === 0) formats = [1080, 720, 480, 360];
 
             return res.json({
-                title: info.title || 'YouTube Video',
-                thumbnail: info.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                title: info.title || 'Media Video',
+                thumbnail: info.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=600'),
                 duration: info.duration || 0,
                 formats: formats.map(h => ({ height: h, filesize: null }))
             });
@@ -318,12 +337,19 @@ app.get('/api/info', async (req, res) => {
             if (oRes.ok) {
                 const oData = await oRes.json();
                 return res.json({
-                    title: oData.title || 'YouTube Video',
+                    title: oData.title || 'Media Video',
                     thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
                     duration: 0,
                     formats: [{ height: 1080 }, { height: 720 }, { height: 480 }, { height: 360 }]
                 });
             }
+        } else {
+            return res.json({
+                title: 'Media Video',
+                thumbnail: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=600',
+                duration: 0,
+                formats: [{ height: 1080 }, { height: 720 }, { height: 480 }, { height: 360 }]
+            });
         }
     } catch (e) {}
 
@@ -336,7 +362,7 @@ app.get('/api/download', async (req, res) => {
     if (!url || !jobId) return res.status(400).json({ error: 'URL and jobId are required' });
     
     format = format === 'mp3' ? 'mp3' : 'mp4';
-    url = normalizeYouTubeUrl(url);
+    url = normalizeUrl(url);
     const videoId = extractVideoId(url);
     
     logger.info(`[Job ${jobId}] Download request. Format: ${format}, Quality: ${quality || 'audio'}, URL: ${url}`);
