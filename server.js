@@ -303,9 +303,12 @@ app.get('/api/info', async (req, res) => {
             formats = [...new Set(formats)];
             if (formats.length === 0) formats = [1080, 720, 480, 360];
 
+            let defaultTitle = info.title || 'Media Content';
+            let defaultThumb = info.thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=600');
+
             return res.json({
-                title: info.title || 'YouTube Video',
-                thumbnail: info.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                title: defaultTitle,
+                thumbnail: defaultThumb,
                 duration: info.duration || 0,
                 formats: formats.map(h => ({ height: h, filesize: null }))
             });
