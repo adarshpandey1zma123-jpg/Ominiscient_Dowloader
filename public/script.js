@@ -218,21 +218,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (data.tempId) {
                     const serveUrl = `/api/serve?tempId=${data.tempId}&filename=${encodeURIComponent(data.filename)}`;
                     
-                    // Trigger mobile-safe anchor download
-                    const link = document.createElement('a');
-                    link.href = serveUrl;
-                    link.download = data.filename || 'video.mp4';
-                    link.target = '_self';
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
+                    // Single 1-time download trigger (Prevents double downloads)
+                    if (!progressContainer.dataset.downloaded) {
+                        progressContainer.dataset.downloaded = "true";
+                        const link = document.createElement('a');
+                        link.href = serveUrl;
+                        link.download = data.filename || 'video.mp4';
+                        link.target = '_self';
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                    }
 
                     // Render fallback manual download button for mobile browsers (iOS Safari / Android Chrome)
-                    progressInfo.innerHTML = `<a href="${serveUrl}" download="${data.filename || 'video.mp4'}" style="display:inline-block; margin-top:8px; padding:8px 16px; background:#10b981; color:#fff; text-decoration:none; border-radius:20px; font-weight:600; font-size:0.85rem;"><i class="fa-solid fa-download"></i> Tap to Save File to Phone</a>`;
+                    progressInfo.innerHTML = `<a href="${serveUrl}" download="${data.filename || 'video.mp4'}" style="display:inline-block; margin-top:8px; padding:8px 16px; background:#10b981; color:#fff; text-decoration:none; border-radius:20px; font-weight:600; font-size:0.85rem;"><i class="fa-solid fa-download"></i> Save Video File</a>`;
 
                     setTimeout(() => {
                         downloadBtn.disabled = false;
-                    }, 5000);
+                        delete progressContainer.dataset.downloaded;
+                    }, 6000);
                 }
             } else if (data.type === 'error') {
                 eventSource.close();

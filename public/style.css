@@ -578,6 +578,8 @@ footer {
     align-items: center;
     gap: 0.4rem;
     backdrop-filter: blur(10px);
+    text-decoration: none;
+    cursor: pointer;
     transition: all 0.25s ease;
 }
 
